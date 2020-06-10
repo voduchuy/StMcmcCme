@@ -1,0 +1,831 @@
+\documentclass[1p]{article}
+
+\usepackage{booktabs}
+\usepackage{makecell}
+\usepackage{import}
+\usepackage{listings}
+\usepackage{graphicx}
+\usepackage{tkz-graph}
+\usepackage{algpseudocode}
+\usepackage[ruled,vlined]{algorithm2e}
+\usepackage{float}
+\usepackage{epstopdf}
+\usepackage{subfigure}
+\usepackage{mathtools}
+
+\usepackage{hyperref}
+\usepackage{amssymb,upref,enumerate}
+\usepackage{tikz}
+\usepackage{amsmath,amssymb,amscd,amsthm,amsxtra}
+\usepackage{latexsym}
+\usepackage{bm}
+
+\usepackage{dsfont}
+
+\renewcommand{\algorithmicrequire}{\textbf{Input:}}
+\renewcommand{\algorithmicensure}{\textbf{Output:}}
+
+
+%Special operators for the CME
+\newcommand{\noreaction}{M}
+\newcommand{\onestepexpand}[1]{\mathcal{R}\left({#1}\right)}
+\newcommand{\rstepexpand}[2]{\mathcal{R}^{#2}\left({#1}\right)}
+\newcommand{\SSA}{\operatorname{SSA}}
+\newcommand{\support}[1]{\operatorname{supp}\left(#1\right)}
+\newcommand{\vspan}{\operatorname{span}}
+\DeclareMathOperator{\re}{Re}
+\DeclareMathOperator{\im}{Im}
+\renewcommand{\vec}{\bm}
+
+% Error tolerance
+\newcommand{\fsptol}{{\varepsilon_{\it FSP}}}
+% t_f t_final
+\newcommand{\tf}{t_{f}}
+%The wide bar
+\def\wbar#1{\,\overline{\!#1}}
+
+\def\eps{\epsilon}
+\def\PP{\mathcal{P}}
+\def\QQ{\mathcal{Q}}
+\def\IR{{\mathbb{R}}}
+\def\IC{{\mathbb{C}}}
+\def\<#1>{\langle{#1}\rangle}
+\let\nref=\eqref
+
+\long\def\comment#1{}
+
+\def\droptol{\mbox{$\varepsilon_{\rm tol}$}}
+\def\bA{\bm{A}}
+\def\bB{\bm{B}}
+\def\bC{\bm{C}}
+\def\bD{\bm{D}}
+\def\bV{\bm{V}}
+\def\bH{\bm{H}}
+\def\bE{\bm{E}}
+\def\bcE{\bm{{\cal E}}}
+\def\bS{\bm{S}}
+\def\bX{\bm{X}}
+\def\be{\bm{e}}
+\def\bv{\bm{v}}
+\def\by{\bm{y}}
+\def\bp{\bm{p}}
+\def\br{\bm{r}}
+\def\bw{\bm{w}}
+\def\bx{\bm{x}}
+\def\onehalf{\frac{1}{2}}
+\def\onehalf{\frac{1}{2}}
+\def\onethird{\frac{1}{3}}
+\def\twothird{\frac{2}{3}}
+\def\rank{\operatorname{rank}}
+
+% Floor and ceil
+\DeclarePairedDelimiter\ceil{\lceil}{\rceil}
+\DeclarePairedDelimiter\floor{\lfloor}{\rfloor}
+
+\title{Multifidelity ST-MCMC framework for Bayesian parameter inference and model comparison from discrete single-cell measurements}
+
+\author{
+Thomas Catanach
+  \thanks{
+  Sandia National Laboratory, CA, USA
+}
+\and
+Huy D. Vo
+  \thanks{
+  Department of Chemical and Biological Engineering, Colorado State University, CO, USA
+}
+\and
+Brian Munsky
+  \thanks{
+  Department of Chemical and Biological Engineering, Colorado State University, CO, USA
+}
+}
+
+
+\begin{document}
+\maketitle
+\begin{abstract}
+Stochastic reaction network models are often used to explain and predict the dynamic of gene expression circuits in single cells. These models usually involve a several parameters, such as the kinetic rates of chemical reactions, that are not directly measurable and must be inferred from experimental data.
+ Bayesian inference provides a rigorous probabilistic framework for identifying these parameters by finding a posterior parameter distribution that captures their uncertainty.
+ Traditional computational methods for solving inference problems such as Markov Chain Monte Carlo methods based on the classic Metropolis-Hastings algorithm involves many evaluations of the likelihood function, which in turn requires the expensive forward solutions of the chemical master equation (CME) in a serial manner.
+ We propose an alternative approach based on a multifidelity extension of the Sequential Tempered Markov Chain Monte Carlo (ST-MCMC) sampler.
+ This algorithm is built upon Sequential Monte Carlo and solves the Bayesian inference problem by decomposing it into a sequence of efficiently solved sub problems that gradually increase model fidelity and the influence of the observed data.
+ We reformulate the finite state projection (FSP) algorithm, a well-known method for solving the CME, to produce a hierarchy of surrogate master equations to be used in this multifidelity scheme.
+ To determine the appropriate fidelity, we introduce a novel information-theoretic criteria that seeks to extract the most information about the ultimate Bayesian posterior from each model in the hierarchy without inducing significant bias.
+ The novel sampling scheme is tested with a high performance computing environment using biologically inspired test problems.
+\end{abstract}
+
+\section{Introduction}
+A distinguishing feature of biology is the diversity manifested by living things across different scales, from the readily observed multitude of species to the differences between individuals of the same species.
+At the microscopic level, a population of cells with the same genetic code, growing under the same lab conditions, could still display phenotypic variability in gene products~\cite{Elowitz2000}.
+This has been supported by an increasing volume of data obtained from single-cell, single-molecule measurements enabled by recent progresses in chemical labeling and imaging techniques~\cite{Raj2008}.
+
+Much of the variability in gene expression is attributed to the stochasticity of vital cellular processes (e.g., transcription, translation) that are subjected to the randomness of molecular interactions.
+Stochastic reaction networks (SRN) represent a class of models that have been widely used to capture the temporal, spatial fluctuations in single-cell gene expression~\cite{Gillespie1992}.
+SRN models treat the copy numbers of biochemical species as states in a discrete-space, continuous-time Markov process, where chemical reactions are represented by transition between states.
+Given an SRN model, the probabilities of cellular states could be computed by solving the chemical master equation (CME), which is a dynamical system in an infinite-dimensional space that describe the evolution of the probability distribution of all states.
+The finite state projection (FSP) is a well-known approximate method to obtain high-fidelity solutions of the CME~\cite{Munsky2006}.
+This method reduces the intractable state space of the original SRN into a finite subset chosen based on a proven error bound, thus turning the infinite-dimensional CME system into a finite problem of linear differential equations.
+
+The present work is concerned with the selection, parameter estimation, and uncertainty propagation of these reaction network models within a Bayesian framework.
+ Bayesian methods are a powerful tool for system identification for SRN models because they provide rigorous uncertainty quantification by identifying a probability distribution over plausible model parameters based instead of only identifying a single model that may fit the data well. \textcolor{red}{Add some refs}
+ This distribution is called the posterior distribution.
+ Quantifying model parameter uncertainty is critical because it is difficult to model the fully complexity of the biological system and it may exhibit experimental context dependence. \textcolor{red}{Cite context dependence paper}
+ Further, once model parameter uncertainty has been quantified, further experiments can be designed to provide new information about the system. \textcolor{red}{Cite bayesian experimental design}
+
+We will focus primarily on data coming from single-molecule fluorescent in situ hybridization (smFISH) technique. These datasets consist of independent single-cell measurements, each of which consists of the copy number of biochemical species, i.e. the observed number of molecules within a cell, at a single measurement time point.
+%
+The standard way to sample from the posterior distribution from such data is to use Markov chain Monte Carlo (MCMC) algorithms such has the random walk Metropolis-Hastings MCMC sampler \textcolor{red}{bayFISH, my PhysBiol paper}.
+With high-fidelity CME solutions enabled by the FSP, one can compute the likelihood of observing these single-cell data and then perform Bayesian inference for model parameters.
+However, this approach suffers from two drawbacks. The first drawback is that the MCMC is inherently serial, preventing it from utilizing the massively parallel processing capability provided by modern high performance computing clusters. Therefore, if standard MCMC techniques are used, several tens to hundreds of thousands of sequential model evaluations may be needed to adequately sample the posterior distribution. The second drawback is that the FSP solves required for the likelihood function are expensive, often requiring several minutes per model evaluation for a moderately sized problem. In general, the number of differential equations that the FSP algorithm needs to solve grow exponentially with the number of species in the network so the size of the state space and transition matrix quickly grows intractable.
+
+We seek to address these important drawbacks using a parallel and multifidelity MCMC computational framework. Many approaches to parallel MCMC methods have been proposed either based on parallel proposals or parallel Markov chains \textcolor{red}{Cite}. One family of popular parallel MCMC methods are those based upon sequential Monte Carlo (SMC) samplers \textcolor{red}{Cite}. For this work, we replace the standard MCMC methods with the Sequentially tempered Markov Chain Monte Carlo (ST-MCMC), which is a massively parallel sampling scheme based on SMC. This method transports a population of model parameter samples through a series of intermediate annealing levels distributions that reflect the gradual increase in the influence of the data likelihood. At each level MCMC is used to explore the intermediate distribution and re-balance the distribution of the samples. Since this method is population based, these MCMC steps can be done in parallel. Further, this method can effectively adapt to the target posterior distribution to speed up sampling.
+
+Similarly, many approaches to multifidelity MCMC have been explored in the literature such as multifidelity delayed acceptance schemes and the multifidelity approaches to SMC \textcolor{red}{Cite}. Multifidelity delayed acceptance schemes have been applied to Bayesian inference for the CME before  \textcolor{red}{Cite}. Within these methods, a fast surrogates of the expensive likelihood function is used to pre-screen proposed samples in the MCMC before they are accepted or rejected based upon the expensive CME likelihood. This method still requires many sequential full model evaluations in order to sample the posterior. In contrast, multifdelity SMC methods are being developed like the Multilevel Sequential$^2$ Monte Carlo sampler \textcolor{red}{Cite Latz}. We take a similar approach and develop a multifidelity form of ST-MCMC for solving the CME.   Within these methods, instead of just considering a series of annealing levels, we also consider a hierarchy of model fidelity.  Thus the solution of the full inference problem is broken down by steering the samples from a distribution which reflects a low fidelity model with little influence from the likelihood to a distribution which reflects the high-fidelity model with full influence of the likelihood. By performing the early updates using fast models, the sampler can quickly converge to the most important parts of parameter space where a higher fidelity model can then be used to better assess which regions of this high-likelihood space are most likely. The key challenge for applying multifidelity methods in the SMC context is deciding which annealing factor and model fidelity is appropriate at a given level. Latz et al. suggest an approach based upon the effective sample size of the population. We take a different approach leveraging a limited number of high fidelity model solves to estimate the information gained about the ultimate posterior given a current model fidelity and annealing factor. This information theoretic criteria can effectively identify when the lower fidelity model is overly biasing the solution and should be discarded in favor of a higher fidelity model.
+%
+We demonstrate the efficiency and accuracy of our novel scheme in solving the parameter estimation, model selection, and uncertainty propagation for stochastic chemical kinetic models in a Bayesian framework. This new approach to multifidelity ST-MCMC using fast surrogates form reduced order models based on a novel reformulation of the FSP, significantly reduces the number of the expensive likelihood function requires to sample the posterior. The example problems are based on models from the system and synthetic biology literature. These include a three-dimensional repressilator gene circuit, a spatial bursting gene expression network, and a stochastic transcription network for the inflammation response gene IL1beta~\cite{Kalb2019}.
+
+As such the primary contributions of this paper are:
+\begin{enumerate}
+\item Development of multifidelity ST-MCMC for Bayesian inference of SRNs
+\item Introduction of an information-theoretic criteria for assessing the appropriate model fidelity within multifidleity ST-MCMC
+\item Description of a novel surrogate model of the CME to be used within multifidelity inference problems
+\end{enumerate}
+
+This paper is organized as follows: Section 2 describes general background for stochastic reaction network modeling, finite state projection, Bayesian inference, and MCMC methods. Second 3 describes the  Multifidelity Sequential Tempered MCMC algorithm and the information theoretic criteria for adapting model fidelity. Second 4 describes a novel surrogate models for the CME. Section 5 describes three experiments to identify model parameters in SRNs using Multifidelity ST-MCMC. Finally, Section 6 concludes. \textcolor{red}{Add labels to reference the sections}
+
+\section{Background}
+\subsection{Stochastic reaction networks for modeling gene expression}
+A reaction network consists of $N$ different chemical species $S_1, \ldots, S_N$
+that are interacting via $M$ chemical reactions
+\begin{equation}
+  \label{eq:reaction}
+  \nu_{1,j}^{react}S_1 + \ldots + \nu_{N,j}^{react}S_N
+  \longrightarrow
+  \nu_{1,j}^{prod}S_1 + \ldots + \nu_{N,j}^{prod}S_N
+  .
+\end{equation}
+We are interested in keeping track of the integral vectors
+$\bm{x} \equiv (x_1, \dots, x_N )^T$, where $x_i$ is the
+population
+of the $i$th species.
+Assuming constant temperature and volume, the time-evolution of this system can be modeled by a continuous-time, discrete-space Markov process~\cite{Gillespie1992}.
+The $j$th reaction channel is associated with a stoichiometric vector
+$\bm{\nu}_j = (\nu_{1,j}^{prod} - \nu_{1,j}^{react}, \ldots, \nu_{N,j}^{prod} - \nu_{N,j}^{react})^T$ ($j=1,\ldots,M$) such that, if the
+system is in state $\bm{x}$ and reaction $j$ occurs, the system
+transitions to state $\bm{x}+\bm{\nu}_j$.
+Given $\bm{x}(t)=\bm{x}$, the propensity $\alpha_j(\bm{x}; \theta)dt$ determines the probability that reaction $j$ occurs in the next infinitesimal time
+interval $[t,t+dt)$, where $\theta$ is the vector of model parameters. In other words,
+$$\operatorname{Prob}(\bm{x}(t + dt) = \bm{x} + \bm{\nu}_j | \bm{x}(t) = \bm{x}) = \alpha_j(\bm{x};\theta)dt.$$
+
+An important case of reaction networks are those that follow mass-action kinetics, whose propensity functions take the form
+\begin{equation}
+\label{eq:propensity_mass_action}
+\alpha_j(\bm{x}; \theta)
+=
+c_j(\theta)
+\binom{x_1}{\nu_{1,j}^{react}} \cdot \ldots \cdot \binom{x_N}{\nu_{N,j}^{react}}.
+\end{equation}
+In this formulation, $c_j(\theta)$ is the probability per unit time that a combination of molecules can react via reaction $j$, and the remaining factor is the number of ways the existing molecules can be combined to form the left side of the chemical equation~\eqref{eq:reaction}.
+
+ The time-evolution of the probability distribution of the Markov process is the solution of the linear system of differential equations known as the chemical master equation (CME)
+\begin{equation}
+\label{eq:cme_ode_form}
+\begin{cases}
+\frac{d}{dt}\bm{p}(t)=\bm{A(\theta)}\bm{p}(t),\quad t\in[0,\,t_f]\\
+\bm{p}(0)=\bm{p}_0
+\end{cases},
+\end{equation}
+where $\bm{p}(t)$ is the time-dependent probability distribution of all states, $p(t, \bx)=\textrm{Prob}\{\bm{x}(t)=\bm{x}_i \vert \bm{x}(0)\}$.
+The initial distribution $\bm{p}_0$ is assumed to be given, and $\bm{A}(\theta)$ is the infinitesimal generator of the Markov process, defined entry-wise as
+\begin{equation}
+  \label{eq:cme_matrix}
+  \bm{A}(\bm{y}, \bm{x}; \theta)
+  =
+  \begin{cases}
+    \alpha_j(\bm{x}; \theta) \; \text{ if } \bm{y} = \bm{x} + \bm{\nu}_j \\
+    -\sum_{j=1}^{M}{\alpha_j(\bm{x}; \theta)} \; \text{ if } \bm{y} = \bm{x} \\
+    0 \text{ otherwise}
+  \end{cases}.
+\end{equation}
+Here, we have made explicit the dependence of $\bA$ on the model parameter vector $\theta$, which we need to infer from experimental data.
+\subsection{The finite state projection}
+\label{sec:fsp_background}
+Typically, reaction networks model open biochemical systems, where the set of all possible molecular states is unbounded, making the CME an infinite-dimensional linear system of ODEs.
+The finite state projection (FSP) is a well-known strategy for systematically reduce this linear system into a finite surrogate model with a strict error bound.
+%
+
+The FSP can be thought of as a special class of projection-based model reduction applied to the CME. Specifically, let $\Omega$ be a finite subset of the CME state space. The projection of the CME operator $\bm{A}$ onto the subspace spanned by the point-mass measures $\{ \delta_{\bm{x}} \vert \bm{x} \in \Omega\}$ is given by
+\begin{equation}
+  \widetilde{\bm{A}}_{\Omega}(\bm{y}, \bm{x}) =
+  \begin{cases}
+    \bm{A}(\bm{y}, \bm{x}) \; \text{if } \bm{x}, \bm{y} \in \Omega \\
+    0 \; \text{otherwise}
+  \end{cases}
+  .
+\end{equation}
+
+We can then define a reduced model of the dynamical system~\eqref{eq:cme_ode_form} based on this projection as
+\begin{equation}
+  \label{eq:fsp_system}
+  \frac{d}{dt}{\widetilde{\bm{p}}_{\Omega}}(t)
+  =
+  \widetilde{\bm{A}}_{\Omega}\widetilde{\bm{p}}_{\Omega}(t),
+  \;
+  t \in [0, \tf]
+  .
+\end{equation}
+Clearly, in solving~\eqref{eq:fsp_system} we only need to keep track of the equations corresponding to states in the finite set $\Omega$, which is amenable to numerical treatments.
+
+In contrast to generic projection methods, the gap between the reduced-order model and the true CME could be computed exactly. Indeed, Munsky and Khammash ~\cite[Theorem 2.2]{Munsky2006} proved that the truncation error could be quantified in $\ell_1$ norm as
+\begin{equation}
+  \label{eq:fsp_error_bound}
+  \|\bm{p}(t) - \widetilde{\bm{p}}_{\Omega}(t)\|_{1}
+  =
+  1 - \sum_{\bm{x} \in \Omega}{\tilde{p}_{\Omega}(t, \bm{x})}.
+\end{equation}
+Clearly, the right hand side can be readily computed from the solution of the reduced system~\eqref{eq:fsp_system}.
+From this precise error quantification, we have effective iterative method for solving the CME. Choosing an error tolerance $\varepsilon>0$, starting from any initial set $\Omega:=\Omega_{0}$, we solve system~\eqref{eq:fsp_system} and check that the right hand side of~\eqref{eq:fsp_error_bound} is less than $\varepsilon$. If this fails, we add more states to $\Omega_0$ to get a strictly larger set $\Omega_1$ and repeat the procedure until we find an approximation that satisfies our error tolerance.
+
+As the sequence of subsets $\Omega_i$ grows until it eventually covers the whole state space, we might expect that the solution of~\eqref{eq:fsp_system} will likewise converge to the true solution. This is indeed the case for all models where the resulting stochastic process is non-explosive~\cite{Munsky2006}. Sufficient conditions for the convergence of the surrogate CMEs could be checked based on the form of the propensity function~\cite{Gauckler2014, Gupta2014}. In particular, propensity functions in mass-action form~\eqref{eq:propensity_mass_action} guarantee convergence.
+While any choice of $\{\Omega_j\}$ suffices for convergence, as long as it converges to the whole space, some choices are more effecient than other.
+Furthermore, it is more advantageous to partition the time interval into smaller timesteps and use a smaller $\Omega_j$ on each step.
+We will expand on these observations in section~\ref{sec:adaptive_fsp}.
+
+A final point to make about the FSP is that, if the sequence of reduced sets $\Omega_j$ are increasing, that is, $\Omega_j \subset \Omega_{j+1}, j=1,2,\ldots$, the resulting truncation error has been shown to decrease monotonically~\cite[Theorem 2.1]{Munsky2006}. This gives us a natural way to form a hierarchy of reduced models for the CME, and we will return to this in section~\ref{sec:surrogate_cme}. With the computed distribution of the SRN in our hands, we can now match them directly to experimental data using a straightforward likelihood function. We discuss this next.
+\subsection{Bayesian inference of SRN models from discrete single-cell measurements}
+We are interested in infering the parameters for the reaction network from discrete, single-cell datasets~\cite{Femino1998,Raj2008,munsky_science,BayesFISH2017} that consist of several snapshots of many independent cells taken at discrete times $t_1,\ldots, t_T$. The snapshot at time $t_i$ records gene expression in $n_i$ cells, each of which can be collected in the data vector $\bm{c}_{j,i}, \; j = 1,\ldots, n_i$ of molecular populations in cell $j$ at time $t_i$.
+
+Assume that a model class $\mathcal{M} = \left\{M(\theta)\right\}_{\theta \in \Theta}$ of stochastic reaction networks have been chosen to model the data, which consists of a fixed set of reactions with unknown reaction parameters $\theta$.
+Let $p(t, \bm{x} | M(\theta))$ denote the entry of the CME solution corresponding to state $\bx$ at time $t$, given by SRN model $M(\theta)$.
+The log-likelihood of the data set $\mathcal{D}$ given $M(\theta)$ is given by
+\begin{equation}
+  \label{eq:full_logl}
+  {L}(\mathcal{D} \vert \theta)
+  =
+  \sum_{i=1}^{T}
+  \sum_{j=1}^{n_i}
+  {\log{p(t_i, \bm{c}_{j,i} | M(\theta))}}.
+\end{equation}
+
+A common approach to fitting this model would be to find model parameters $\theta$ that would maximize the log-likelihood function. These parameters would be those that best fit the data, however this process does not capture any uncertainty about those parameters. There are potentially many other models which could  fit the data approximately as well as the maximum likelihood model. In contrast, with a Bayesian approach we seek to quantify this parameter uncertainty so that we can be confident in our inference results, understand the influence of this uncertainty on future predictions, and design future experiments to reduce the parameter uncertainty.
+
+Bayesian inference is rooted in the Bayesian philosophy of probability in which our uncertainty about the world is modeled using probability distributions. As information becomes available we update these distributions to reflect our new state of understanding about the world. Therefore, for Bayesian inference we begin with a prior distribution, $p \left ( \theta \right )$, that captures our initial beliefs about model parameters. Then after data has been observed, the likelihood of the data given a model class and associated parameters can be found as $p \left (\mathcal{D} \mid \theta \right ) = \exp({L}(\mathcal{D} \vert \theta))$. By applying Bayes' Theorem, we can integrate the prior and likelihood information together to construct the posterior distribution on model parameters that reflects our updated beliefs after data has been observed:
+
+\begin{equation}
+  \label{eq:Bayes}
+  p \left ( \theta \mid \mathcal{D} \right ) = \frac{p \left (\mathcal{D} \mid \theta \right )p \left ( \theta \right )}{p \left ( \mathcal{D} \right )}
+\end{equation}
+
+Here, $p \left ( \mathcal{D} \right )$ is a normalization constant known as the model evidence which is relevant for Bayesian model selection problems but is not required for parameter calibration. When $p \left ( \theta \right )$ is a constant, the parameters that maximize the posterior density are equivalent to the maximum likelihood estimator. Solving the Bayesian inference problem to identify parameters allows us to quantify our uncertainty regarding the accuracy of the parameter fit by sampling from the posterior distribution. However it can be a computationally challenging problem as discussed in the next subsection.
+
+The Bayesian framework also provides a criteria to select or weight different model classes as data becomes available. Suppose, instead of a single model class, we are given $K$ possible network structures that can potentially explain the observations. Let $\mathcal{M}^k = \{M^k(\theta^k)\}_{\theta^k \in \Theta^k}$ denote the $k$-th class, where the parameter domains $\Theta^k$ need not have the same dimensionality. Each model class is associated with a prior weight $P(\mathcal{M}^k)$ that represents the prior level of belief in each class.
+
+Let $\mathcal{D}$ denote the dataset as before, we can compute the model evidence of $\mathcal{M}^k$ as
+\begin{equation}
+  P(\mathcal{D} | \mathcal{M}^k)
+  =
+  \int_{\theta \in \Theta^k}
+  {
+  p \left (\mathcal{D} \mid \theta,   \mathcal{M}^k \right )P(\theta \mid \mathcal{M}^k)
+  \operatorname{d\theta}
+  }.
+\end{equation}
+
+The posterior probability of each model class can then be found again by applying Bayes' Theorem:
+
+\begin{equation}
+P \left (\mathcal{M}^k \mid  \mathcal{D}\right)  = \frac{P(\mathcal{D} | \mathcal{M}^k) P(\mathcal{M}^k)}{\sum_{j=1}^K P(\mathcal{D} | \mathcal{M}^j) P(\mathcal{M}^j)}
+\end{equation}
+
+These probabilities then reflect the posterior weighting of the different model classes that can be used to make average predictions over the models. Similarly, the Bayes factors
+\begin{equation}
+  \frac{P \left (\mathcal{M}^k \mid  \mathcal{D}\right)}
+  {P \left (\mathcal{M}^j \mid  \mathcal{D}\right)},
+  j, k = 1, \ldots, K, \; j \neq k
+\end{equation}
+allow us to compare and rank the models based on how strongly they are supported by the current data for Bayesian model selection. The drawback of Bayesian model selection in the context of stochastic gene expression is the computational cost of computing the model evidences. In the next subsection, we will introduce sequential Monte Carlo samplers that produce samples from the posterior parameter distribution of each model class while simultaneously estimating the evidence of the model class.
+
+\subsection{Markov Chain Monte Carlo samplers}
+
+Markov Chain Monte Carlo algorithms are widely used for sampling the posterior distribution of a Bayesian inference problem. These methods design a Markov chain whose stationary distribution is the target posterior distribution, $p \left ( \theta \mid \mathcal{D} \right )$. Therefore, by simulating the evolution of samples, $\theta$ according to the Markov chain, samples are asymptotically drawn from the posterior distribution. However, unlike Monte Carlo sampling, these samples are correlated. A common MCMC method is the Metropolis-Hastings algorithm. The algorithm begins by initializing the parameter state to some $\theta_0$. Then at a step $i+1$ in the evolution, a candidate sample $\theta^\prime$ is drawn according to a proposal distribution $Q \left (\theta^\prime \mid \theta_{i}\right )$. This candidate is then accepted or rejected with probability $\alpha \left (\theta^\prime \mid \theta_i \right )$  given by
+
+\begin{equation}
+\alpha \left ( \theta^\prime \mid \theta_i \right ) = \min \left ( 1, \frac{p \left ( \theta^\prime \mid \mathcal{D} \right ) Q \left ( \theta_{i} \mid \theta^\prime \right ) }{p \left ( \theta_i \mid \mathcal{D} \right ) Q \left (\theta^\prime \mid  \theta_{i} \right ) } \right ) = \min \left ( 1, \frac{p \left (\mathcal{D} \mid \theta^\prime \right )p \left ( \theta^\prime \right ) Q \left ( \theta_{i} \mid \theta^\prime \right ) }{p \left (\mathcal{D} \mid \theta_i \right )p \left ( \theta_i \right ) Q \left (\theta^\prime \mid  \theta_{i} \right ) } \right )
+\end{equation}
+
+This acceptance probability is therefore independent of the normalization constant $p \left ( \mathcal{D} \right )$ and therefore computationally tractable. If the candidate is accepted $\theta_{i+1} = \theta^\prime$; otherwise, $\theta_{i+1} = \theta_i$. This algorithm iterates until a sufficient number of posterior samples have been generated to accurately represent the posterior.
+
+ To judge whether sufficient posterior samples have been generated using the MCMC sampler, a common method is the notion of effective sample size (ESS). The ESS of a $N$ sample, correlated, population $\theta_{i=1...N}$ corresponds to the number of independent samples which would estimate a quantity of interest, $\hat{q} = E \left [ q \left (  \theta \right ) \right ]$, as well as the correlated sample population. Therefore, the ESS of a quantify of interested can be computed as
+
+ \begin{equation}
+ N_{ESS} = \frac{Var \left [q \left (  \theta \right )\right  ]}{Var \left [ \hat{q} \right  ]}
+ \end{equation}
+
+ Based upon the Markov chain Central Limit Theorem, for samples generated according to a Markov process the ESS can be approximated as
+
+  \begin{equation}
+ N_{ESS} = \frac{N}{1 + 2 \sum_{i=1}^N \rho_i \left ( q\left (\theta_{1 \dots N} \right ) \right )}
+ \end{equation}
+
+ where $\rho_i$ is the $i$th lag autocorrelation of the quantify of interest whose evolution is defined by the Markov chain. Overall, when designing a Metropolis-Hastings proposal distribution $Q \left (\theta^\prime \mid \theta_{i}\right )$ we want to do it in a way that minimizes the correlation and thus maximizes $\frac{N_{ESS} }{N}$ to attain the highest possible sampling efficiency. However, even every effective samplers often need tens of thousands of sequential model evaluations to generate enough effective samples making this form of MCMC challenging for computationally expensive models.
+
+\subsection{Sequential Monte Carlo samplers}
+To overcome many of the challenges associated with standard Metropolis-Hastings based MCMC methods, parallel methods, like Sequential Monte Carlo (SMC), have been introduced to better leverage high performance computing resources. SMC methods for Bayesian inference transport a sample population suitable for approximating expectations with respect to the prior distribution to one which can approximate posterior expectations. \textcolor{red}{Add some refs} In many methods, this means a population of samples initially distributed according to the prior being transformed into one approximately distributed according to the posterior. For Sequential Tempered MCMC (ST-MCMC) this is done by breaking the inference problem down to a series of annealing levels $i$ defined by an annealing factor $\beta_i \in \left [0, 1 \right ]$. Each level defines an intermediate distribution, $\pi_{\beta_i}\left (\theta \right )$, which we would like to use to generate samples in order to express exceptions. These intermediate distributions take the form of
+
+\begin{equation}
+\pi_{\beta_i}\left (\theta \right ) = p \left (\theta \mid \mathcal{D}, \beta_i \right) = \frac{p \left (\mathcal{D} \mid \theta \right )^{\beta_i} p \left ( \theta \right )}{\int p \left (\mathcal{D} \mid \theta \right )^{\beta_i} p \left ( \theta \right ) d\theta}
+\end{equation}
+
+This annealing approach is common to many SMC methods used for Bayesian Inference \textcolor{red}{Add some refs} and can be thought of as gradually integrating the influence of the data into the solution. To break down the problem of transporting samples from the prior, $\pi_0\left (\theta \right )$, to posterior, $\pi_1\left (\theta \right )$, we transport samples sequentially through each level in the sequence, i.e. $\pi_{\beta_i}\left (\theta \right )$ to $\pi_{\beta_{i+1}}\left (\theta \right )$ with $\beta_{i+1} > \beta_{i}$. Because we can control the size of the jump $\Delta \beta = \beta_{i+1}-\beta_i$, we can ensure that this change is not too drastic to cause poor approximation of the true distribution i.e. too drastic a decrease in the ESS. Transporting samples is done by three steps:
+
+\begin{enumerate}
+	\item Re-weight the previous sample population, distributed according to $\pi_{\beta_i}\left (\theta \right )$, with unnormalized weights $w_i = p \left (\mathcal{D} \mid \theta_i \right )^{\Delta \beta}$ to now reflect expectations with respect to the new distribution $\pi_{\beta_{i+1}}\left (\theta \right )$.
+	\item Re-sample the population according to the weights so that the samples now reflect $\pi_{\beta_{i+1}}\left (\theta \right )$.
+	\item Seed a Markov chain starting at each sample to explore $\pi_{\beta_{i+1}}\left (\theta \right )$ using MCMC.
+\end{enumerate}
+
+The MCMC step is essential to ensure the sample population does not degenerate since the re-weighting and re-sampling steps reduce the ESS of the population. MCMC increases the ESS because it decorrelates the seeds and explores the target distribution causing samples to better reflect it. Typically $\Delta \beta$ is chosen adaptively to not decrease the ESS too much during the update. This is done by finding a $\Delta \beta$ such that the coefficient of variation (COV) of the sample weights equals a target $\kappa$. The COV approximates the ESS by $N_{ESS} \approx \frac{N}{1 + \kappa^2}$. Therefore we find a $\Delta \beta > 0$ to solve the equation
+
+\begin{equation}
+\kappa = \frac{\sqrt{\frac{1}{N} \sum_{i=1}^N \left ( w_i \left ( \Delta \beta \right ) - \hat{w}\left ( \Delta \beta \right ) \right)^2}}{\hat{w}\left ( \Delta \beta \right )}
+\label{eq:betatune}
+\end{equation}
+
+Here $w_i\left ( \Delta \beta \right ) = p \left (\mathcal{D} \mid \theta_i \right )^{\Delta \beta}$ and $\hat{w}\left ( \Delta \beta \right ) = \frac{1}{N} \sum_{i=1}^N w_i\left ( \Delta \beta \right )$. Often a $\kappa = 1$ is used, corresponding to an ESS of $N/2$. With this method for finding $\Delta \beta$, we then sequentially move through all the adaptively tuned annealing levels until we reach the final posterior reflected by $\pi_1\left (\theta \right )$. For more details about this algorithm see \textcolor{red}{Add some refs and maybe algorithm pseudocode}
+
+\section{Multifidelity ST-MCMC}
+
+For expensive models ST-MCMC and similar SMC based methods may still be computationally prohibitive. One approach to overcoming this computational burden is to utilize a multifidelity model hierarchy that can speed up sampling. The key idea is that for early levels of the ST-MCMC algorithm, a low fidelity, but computationally cheap, model may be sufficiently informative to guide the samples towards the ultimate posterior distribution. This is because at early levels, the annealing factor causes the contribution of the likelihood to be damped so perturbations in the likelihood caused by the decrease in model fidelity will be less important. On an intuitive level, a lower fidelity model may be useful when the bias it introduces in the likelihood function is less than the variance of the likelihood at the annealing level. We will consider different strategies for rigorously defining this intuition later on in the rest of this section.
+
+Therefore, we extend ST-MCMC to multifidelity ST-MCMC by defining intermediate levels both in terms of their annealing factor $\beta$ and the choice of model fidelity $M$ where we have a hierarchy of models $\mathcal{M} = \{ M_j : j = 1 \dots K\}$ with increasing fidelity and computational cost. This algorithm is generally described in Algorithm \ref{MFSTMCMC}. The key challenge is deterening the best strategy for choosing $\beta_l$ and $m_l$ and Step 2.
+
+\begin{algorithm}[H]
+\SetKwInOut{Input}{Inputs}\SetKwInOut{Output}{Output}\SetKwInOut{Initialization}{Initialize}
+\Input{ Prior distribution $p \left ( \theta \right ) $\\
+Model fidelity hierarchy $\mathcal{M} = \{ M_j : j = 1 \dots K\}$\\
+Likelihood function $p \left ( \mathcal{D} \mid \theta,  M_j \right )$ \\
+ Number of samples $N$}
+\Output{Posterior samples $\theta_{1 \dots N}$}
+\BlankLine
+\Begin{
+\Initialization{Set level counter $l=0$ \\
+ Set annealing factor $\beta_0 = 0$\\
+ Set model level $m_0 = 1$ \\
+ First intermediate distribution $\pi_0 \left ( \theta \right ) = p \left ( \theta \right )$ \\
+ Draw initial samples $\theta_{1 \dots N}^0 \sim \pi_0 \left ( \theta \right ) $ }
+\While{$\pi_{\beta_l} \left ( \theta \mid M_{m_l} \right ) \neq p \left ( \theta \mid \mathcal{D}, M_K \right )$}{
+1) Increment level counter $l = l + 1$\\
+2) Choose the next $\beta_l$ and $m_l$ based upon the previous level sample population $\theta_{1 \dots N}^{l-1}$\\
+3) Define the next intermediate distribution $\pi_{\beta_l} \left ( \theta \mid M_{m_l} \right ) \propto p \left ( \mathcal{D} \mid \theta,  M_{m_l} \right )^{\beta_l} p \left ( \theta \right )$  \\
+4) Compute the unnormalized importance weights for the population as $w_i = \frac{\pi_{\beta_l} \left ( \theta_i^{l-1} \mid M_{m_l} \right )}{\pi_{\beta_{l-1}} \left ( \theta_i^{l-1} \mid M_{m_{l-1}} \right )}$\\
+5) Resample the population according to the normalized importance weights to initialize $\theta_{1 \dots N}^{l}$\\
+6) Evolve the samples $\theta_{1 \dots N}^{l}$ using MCMC with stationary distribution $\pi_{\beta_l} \left ( \theta \mid M_{m_l} \right )$
+}
+\Return $\theta_{1 \dots N} = \theta_{1 \dots N}^{l}$
+}
+\caption{Multifidelity ST-MCMC \label{MFSTMCMC}}
+\end{algorithm}
+
+\subsection{ESS tuned tempering and bridging}
+
+One approach to choosing the appropriate annealing factor and model fidelity is a combined tempering and bridging scheme discussed in Latz et al. \textcolor{red}{Cite}. This scheme is based upon the ESS statistic discussed in Section \textcolor{red}{Section Number}. Within Multifidelity ST-MCMC, at every level $l$ of Algorithm \ref{MFSTMCMC}, we choose whether to temper by changing $\beta_l = \beta{I-1}+\Delta \beta$ or to bridge by changing the model fidelity $m_l = m_{l-1} + 1$. This choice is made by measuring the ESS of the sample population with respect to the next change in the model fidelity by first computing the unnormalized weights as if we were to bridge
+
+\begin{equation}
+w_i = \frac{\pi_{\beta_l-1} \left ( \theta_i^{l-1} \mid M_{m_{l-1}+1}\right )}{\pi_{\beta_{l-1}} \left ( \theta_i^{l-1} \mid M_{m_{l-1}} \right )} = \frac{p \left ( \mathcal{D} \mid \theta_i^{l-1},  M_{m_{l-1}+1} \right )^{\beta_{l-1}} }{p \left ( \mathcal{D} \mid \theta_i^{l-1},  M_{m_{l-1}} \right )^{\beta_{l-1}} }
+\end{equation}
+
+With these weights we can then compute the coefficient of variation of the weights to determine if it exceeds a target $\kappa$. If it does we choose to bridge because the sample population is starting to degenerate compared to the intermediate posterior defined by the next level so it will poorly approximate it. If the COV is less than $\kappa$, we choose to keep the current model but instead temper $\beta$. The next beta is chosen using the same strategy as before by solving Equation \ref{eq:betatune}.
+
+\subsection{Information-theoretic criteria for model fidelity adaptation}
+We introduce a new criteria for model fidelity selection based upon information theory. This criteria is motivated by the fact that the ESS based strategy described above only decides to a change fidelity based upon the next model in the hierarchy. Instead, we introduce a method that utilizes a limited number of full fidelity model evaluations to help us better decide when to bridge models. Depending upon the computational cost of the full fidelity simulations, the improved bridging strategy and the improved robustness of this method, may out way the cost of these full fidelity solutions.
+
+Within  multifidelity ST-MCMC, if the algorithm is at annealing level $l$ with annealing factor $\beta_l \in \left [0, 1\right ]$ and has been sampling the intermediate posterior defined by a model, $M_{m_l}$, in a model hierarchy $\mathcal{M} = \{ M_j : j = 1 \dots K\}$, we would like to know whether $M_{m_l}$ still provides meaningful information about the ultimate posterior once we move to level $l+1$ with annealing factor $\beta_{l+1}$. Here we assume the ultimate posterior is $p \left (\theta \mid \mathcal{D}, M_K \right )$ where $M_K$ is the highest fidelity model. Therefore, unlike the previous algorithm, we begin by proposing a tempering step under the assumption that the current model fidelity is valid. We find the proposed $\beta_{l+1}$ by solving Equation \ref{eq:betatune}.
+
+If $M_{m_l}$ no longer provides meaningful information at the next level, we should use the next highest fidelity model in the algorithm, $M_{m_l+1}$. This criteria can be formulated using a generalization of information theory \textcolor{red}{Add some refs} , where the information gained by moving from level $l$ to $l+1$ with model $M_{m_l}$ with respect to $p \left (\theta \mid \mathcal{D}, M_K \right )$ is:
+
+\begin{equation}
+\begin{split}
+&\mathcal{I}_{p \left (\theta \mid \mathcal{D}, M_K \right )} \left [ p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_{l+1} \right ) || p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )\right ]\\
+&=D_{\text{KL}} \left [p \left (\theta \mid \mathcal{D}, M_K \right ) || p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )\right ] -D_{\text{KL}} \left [p \left (\theta \mid \mathcal{D}, M_K \right ) || p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_{l+1} \right )\right ]\\
+&=\int p \left (\theta \mid \mathcal{D}, M_K \right ) \log \frac{p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_{l+1} \right )}{p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )} d\theta
+\end{split}
+\label{eq:info}
+\end{equation}
+
+\noindent If this quantity is positive, then the intermediate posterior defined by $\beta_{l+1}$ and $m_l$ is closer to the ultimate posterior, so we should choose $m_{l+1} = m_{l}$. Otherwise, this update is driving the distribution away from the ultimate posterior so the highest fidelity model should now be used for the next update, so $m_{l+1} = m_{l}+1$.
+
+
+If we choose to update the model fidelity, we consider two strategies for choosing $\beta_{l+1}$ for the next level. The first strategy, keeping with the tempering and bridging framework from above, is choosing to set $\beta_{l+1} = \beta_{l}$. The second strategy is to tune $\beta_{l+1}$ to try attain an ESS target. The first strategy is generally more computationally efficient, but may not be as robust if changing model fidelity introduces significant variations. To tune $\beta_{l+1}$ first we define the importance weight for transitioning from a level defined by $\beta_i$ and $m_{l}$ to a level defined by $\beta_{l+1}$ and $m_{l+1} = m_{l}+1$ as
+
+\begin{equation}
+w_i = \frac{\pi_{\beta_{l+1} \left ( \theta_i^{l} \mid M_{m_{l}+1}\right )}}{\pi_{\beta_{l}} \left ( \theta_i^{l} \mid M_{m_{l}} \right )} = \frac{p \left ( \mathcal{D} \mid \theta_i^{l},  M_{m_{l}+1} \right )^{\beta_{l+1}} }{p \left ( \mathcal{D} \mid \theta_i^{l},  M_{m_{l}} \right )^{\beta_{l}} }
+\end{equation}
+
+Using the same approach as before, we can then tune $\beta_{l+1}$ to meet some ESS target based upon the COV of the weights. However, unlike in previous problems, this might not be achievable.  If Equation \ref{eq:betatune} has a solution, we chose the largest $\beta_{l+1}$ such that the COV target is met. If Equation \ref{eq:betatune} does not have a solution, we find the $\beta_{l+1}$ that minimizes the COV and thus maximizes the ESS.
+
+\subsection{Computing the Information-theoretic criteria}
+
+Since computing the information, Equation \ref{eq:info}, requires marginalizing over the posterior it can be challenging; however, it can be approximated using the samples from ST-MCMC. The first step is to recognize the connection between computing this criteria and estimating the model evidence:
+
+\begin{equation}
+\begin{split}
+&\mathcal{I}_{p \left (\theta \mid \mathcal{D}, M_K \right )} \left [ p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_{l+1} \right ) || p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )\right ]\\
+&=\int p \left (\theta \mid \mathcal{D}, M_K \right )\log \frac{p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_{l+1} \right )}{p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )} d\theta\\
+&=\int p \left (\theta \mid \mathcal{D}, M_K \right )\log \frac{p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\beta_{l+1}} p\left (\theta \right )}{p \left (\mathcal{D} \mid M_{m_l}, \beta_{l+1} \right )} \frac{p \left (\mathcal{D} \mid M_{m_l}, \beta_{l} \right )}{p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\beta_l} p\left (\theta \right )} d\theta\\
+&= \int p \left (\theta \mid \mathcal{D}, M_K \right )\log p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta} \frac{p \left (\mathcal{D} \mid M_{m_l}, \beta_{l} \right )}{p \left (\mathcal{D} \mid M_{m_l}, \beta_{l+1} \right )} d\theta
+\end{split}
+\end{equation}
+
+\noindent Here, $p \left (\mathcal{D} \mid M, \beta \right )$ is the model evidence, i.e. normalization, for the likelihood defined by the model $M$ with an annealing factor $\beta$:
+
+\begin{equation}
+p \left (\mathcal{D} \mid M, \beta \right ) = \int p \left (\mathcal{D} \mid \theta, M \right )^{\beta} p \left ( \theta \right ) d\theta
+\end{equation}
+
+\noindent By noting the relationship to model evidence, the ratio of the evidences can be expressed as:
+
+\begin{equation}
+\begin{split}
+\frac{p \left (\mathcal{D} \mid M_{m_l}, \beta_{l} \right )}{p \left (\mathcal{D} \mid M_{m_l}, \beta_{l+1} \right )} &= \frac{\int p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\beta_l} p \left ( \theta \right ) d\theta}{\int p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\beta_{l+1}} p \left ( \theta \right ) d\theta}\\
+&= \frac{1}{\int p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta} \frac{p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\beta_l} p \left ( \theta \right )}{\int p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\beta_l} p \left ( \theta \right ) d\theta}  d\theta}\\
+&= \frac{1}{\int p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta} p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )  d\theta}\\
+&= \frac{1}{\text{E}_{\theta \sim p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )} \left [ p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta} \right ]}
+\end{split}
+\end{equation}
+
+\noindent Therefore,
+
+\begin{equation}
+\begin{split}
+&\int p \left (\theta \mid \mathcal{D}, M_K \right )\log p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta} \frac{p \left (\mathcal{D} \mid M_{m_l}, \beta_{l} \right )}{p \left (\mathcal{D} \mid M_{m_l}, \beta_{l+1} \right )} d\theta\\
+&= \int p \left (\theta \mid \mathcal{D}, M_K \right )\log \frac{p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta}}{\text{E}_{\theta \sim p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )} \left [ p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta} \right ]} d\theta
+\end{split}
+\end{equation}
+
+Since we cannot yet sample $p \left (\theta \mid \mathcal{D}, M_K \right )$ we will use importance sampling to express this integral in terms of a the level $l$ distribution, which we have samples for:
+
+\begin{equation}
+\begin{split}
+&\int p \left (\theta \mid \mathcal{D}, M_K \right )\log \frac{p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta}}{\text{E}_{\theta \sim p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )} \left [ p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta} \right ]} d\theta\\
+&= \int p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right ) \frac{p \left (\theta \mid \mathcal{D}, M_K \right )}{p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )}\log \frac{p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta}}{\text{E}_{\theta \sim p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )} \left [ p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta} \right ]} d\theta\\
+&\propto \int p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right ) \frac{p \left (\mathcal{D} \mid \theta, M_k \right )}{p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\beta_l}}\log \frac{p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta}}{\text{E}_{\theta \sim p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )} \left [ p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta} \right ]} d\theta\\
+\end{split}
+\end{equation}
+
+\noindent This integral only needs to be known up to a constant of proportionality since all we care about is assessing whether it is positive. We can then express it in terms of expectations as:
+
+\begin{equation}
+\begin{split}
+=&\text{E}_{\theta \sim p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )} \left [ \frac{p \left (\mathcal{D} \mid \theta, M_K \right )}{p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\beta_l}} \log p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta} \right ] -\\
+&\text{E}_{\theta \sim p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )} \left [ \frac{p \left (\mathcal{D} \mid \theta, M_K \right )}{p \left (\mathcal{D} \mid \theta, M_{m_l}\right )^{\beta_l}} \right ] \log \text{E}_{\theta \sim p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )} \left [ p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta} \right ]
+\end{split}
+\end{equation}
+
+\noindent We can now estimate whether it is positive or negative based. These expectations can be approximated using the $N$ ST-MCMC samples at level $l$ where ${\theta^l_{i}: i = 1 \dots N}$ is approximately distributed according to $ p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )$ along with evaluation of the full fidelity model likelihood at these points:
+
+\begin{equation}
+\begin{split}
+\text{E}_{\theta \sim p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )} &\left [ \frac{p \left (\mathcal{D} \mid \theta, M_K \right )}{p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\beta_l}} \log p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta} \right ]\\
+& \approx \sum_{l=1}^{N} \frac{p \left (\mathcal{D} \mid \theta^l_i, M_K \right )}{p \left (\mathcal{D} \mid \theta^l_i, M_{m_l} \right )^{\beta_l}} \log p \left (\mathcal{D} \mid \theta^l_i, M_{m_l} \right )^{\Delta \beta}
+\end{split}
+\end{equation}
+
+\begin{equation}
+\text{E}_{\theta \sim p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )} \left [ \frac{p \left (\mathcal{D} \mid \theta, M_K \right )}{p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\beta_l}} \right ] \approx \sum_{l=1}^{N} \frac{p \left (\mathcal{D} \mid \theta^l_i, M_K \right )}{p \left (\mathcal{D} \mid \theta^l_i, M_{m_l} \right )^{\beta_l}}
+\end{equation}
+
+\begin{equation}
+\text{E}_{\theta \sim p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )} \left [ p \left (\mathcal{D} \mid \theta, M_{m_l} \right )^{\Delta \beta} \right ] \approx \sum_{l=1}^{N} p \left (\mathcal{D} \mid \theta^l_i, M_{m_l} \right )^{\Delta \beta}
+\end{equation}
+
+\subsection{Multifidelity ST-MCMC and Bayesian Model Selection}
+
+SMC and ST-MCMC methods not only enable robust solutions of Bayesian inference problems for parameter calibration, but also enable Bayesian model selection by providing asymptotically unbiased estimates of the model evidence. Model evidence estimates are generally highly computationally expensive since they require estimating the normalization constant,
+
+\begin{equation}
+p \left ( \mathcal{D} \mid M \right ) = \int p \left ( \mathcal{D} \mid \theta, M \right ) p \left ( \theta \mid M\right ) d\theta
+\end{equation}
+
+which consists of marginalizing the likelihood over the prior distribution. When the high probability content of the prior differs significantly from the most likely parameters according to the likelihood it is difficult to estimate this integral using Monte Carlo samples.  Instead, SMC type methods break down this estimate into a series of Monte Carlo approximations over the intermediate distribution levels discussed previously.  As such, a hierarchy of multifidelity models can be used to accelerate this estimate within the Multifidelity ST-MCMC framework. Using the methods described in \textcolor{red}{Add some refs}, Multifidelity ST-MCMC can estimate the model evidence of the highest fidelity model, $M_K$, by estimating the product:
+
+\begin{equation}
+p \left ( \mathcal{D} \mid M_K \right ) = \prod_{l = 1}^L \frac{ p \left (\mathcal{D} \mid m_l, \beta_l \right ) }{ p \left (\mathcal{D} \mid m_{l-1}, \beta_{l-1} \right ) } =  \prod_{l = 1}^L c_l
+\end{equation}
+
+where $p \left (\mathcal{D} \mid m, \beta \right ) = \int p \left ( \mathcal{D} \mid \theta, M_{m} \right )^{\beta} p \left ( \theta \right ) d\theta$ and $L$ is the final level of ST-MCMC. The ratio $c_l$ can be written as
+
+\begin{equation}
+\begin{split}
+c_l &= \frac{\int p \left ( \mathcal{D} \mid \theta, M_{m_l} \right )^{\beta_l} p \left ( \theta \right ) d\theta}{\int p \left ( \mathcal{D} \mid \theta, M_{m_{l-1}} \right )^{\beta_{l-1}} p \left ( \theta \right ) d\theta}\\
+&= \int \frac{p \left ( \mathcal{D} \mid \theta, M_{m_l} \right )^{\beta_l}}{p \left ( \mathcal{D} \mid \theta, M_{m_{l-1}} \right )^{\beta_{l-1}}} \frac{p \left ( \mathcal{D} \mid \theta, M_{m_{l-1}} \right )^{\beta_{l-1}} p \left ( \theta \right )}{\int p \left ( \mathcal{D} \mid \theta, M_{m_{l-1}} \right )^{\beta_{l-1}} p \left ( \theta \right ) d\theta} d\theta\\
+&=  \text{E}_{\theta \sim p \left (\theta \mid \mathcal{D}, M_{m_l}, \beta_l \right )} \left [ \frac{p \left ( \mathcal{D} \mid \theta, M_{m_l} \right )^{\beta_l}}{p \left ( \mathcal{D} \mid \theta, M_{m_{l-1}} \right )^{\beta_{l-1}}} \right ]\\
+&\approx \frac{1}{N} \sum_{i=1}^N w_i^l
+\end{split}
+\end{equation}
+
+where $w_i^l$ are the unnormalized resampling weights at level $l$ for the sample population $\theta_{i=1 \dots N}^{l-1}$. Therefore using the existing weights already computed as part of Multifidelity ST-MCMC, we assfrre able to compute an estimate of the model evidence.
+
+\section{Multifidelity reduced models of the chemical master equation}
+\subsection{Surrogate chemical master equations}
+\label{sec:surrogate_cme}
+Surrogate models could be derived by adding restrictive assumptions to the physics of the original model.
+In particular, consider biological surrogates of the original cells modeled by the full CME in which all cellular processes `freeze' when molecular copy numbers reach a certain set of thresholds.
+As we increase these thresholds, the surrogate cells behave more freely and closer to the original cells and the master equation describing their behavior becomes closer to the original CME (Fig.~\ref{fig:surrogate_cme_ssas}).
+
+Precisely, let $b_1, \ldots, b_N$ be bounds on the copy number of species $1$ through $N$. We define an approximate SRN such that
+\begin{equation}
+  \label{eq:surrogate_propensity}
+  \hat{\alpha}_j(\bm{x})
+  =
+  \alpha_j(\bm{x})\prod_{i}[x_i < b_i],
+\end{equation}
+where $[E]$ takes value $1$ if expression $E$ is true and zero otherwise.
+Since there is no further transitions once the process enters a state that exceeds the bounds, the state space of the surrogate chemical master equation  is effectively reduced to the hyper-rectangle $H(b) = \times_{i=1}^{N}\{0,\ldots, b_i\}$.
+Thus, the infinite-dimensional system of differential equations~\eqref{eq:cme_ode_form} is replaced by the finite-dimensional surrogate dynamical system
+\begin{equation}
+  \label{eq:surrogate_cme}
+  M(b):\;
+  \frac{d}{dt}{\widehat{\bm{p}}_{H}(t)}
+  =
+  \widehat{\bm{A}}_{H}
+  \widehat{\bm{p}}_{H}(t),
+  \;
+  \widehat{\bm{p}}_{H}(0) = \widehat{\bm{p}}_0 \vert_{H},
+\end{equation}
+where the truncated infinitesimal generator $\widehat{A}_{H}$ is defined similar to eq.~\eqref{eq:cme_matrix} but with the exact propensities replaced by the surrogate propensities given in eq.~\eqref{eq:surrogate_propensity}.
+
+We note that eq.~\eqref{eq:surrogate_cme} is equivalent to eq.~\eqref{eq:fsp_system} with $\Omega = H(b)$. However, eq.~\eqref{eq:fsp_system} is usually implemented by truncating the original CME, whereas eq.~\eqref{eq:surrogate_cme} is derived by modifying the propensity functions of the SRN itself. We note in passing that this suggests a general approach to derive surrogate CME by deriving a sequence of approximations to the original propensities, with the approximations chosen in such a way that alleviate the computational burden of solving the original model. The hard cut-off introduced in eq.~\eqref{eq:surrogate_propensity} is only one such strategy.
+
+Recall the important result mentioned in section~\ref{sec:fsp_background} that, as the entries of $\bm{b}$ increase monotonically, the state space $H(\bm{b})$ includes more states and the truncation error, measured as the $\ell_1$-distance between $\widehat{\bm{p}}_{H}$ and the true CME solution $\bm{p}(t)$ decreases \emph{monotonically}. This provides us with a straightforward and natural way to form a hiearchy of surrogate models within the multifidelity STMCMC framework as we will discuss later.
+Before we do so, we must first ensure that an accurate solution to the system~\eqref{eq:surrogate_cme} could be computed effeciently. This is discussed next.
+
+\begin{figure}[H]
+  \includegraphics[scale=0.6]{figs/surrogate_ssas}
+  \caption{Realizations of the full and surrogate CMEs for a simple system with mass-action propensity. Given the same random seed, the simulated trajectory of the surrogate CME will be identical to that of the true CME until the state reaches a threshold, where the surrogate trajectory freezes.
+  Increasing the threshold reduces the chance that the surrogate trajectories hit the bounds and consequently more realizations of the true CME are captured by the surrogate model.
+  }
+  \label{fig:surrogate_cme_ssas}
+\end{figure}
+\subsection{Adaptive solution of the surrogate master equation with sparse tensors}
+\label{sec:adaptive_fsp}
+Although the surrogate master equation~\eqref{eq:surrogate_cme} is a significant reduction from the infinite-dimensional CME, the number of states included in the truncated state space $H(b)$ still grows as $O(b_1\cdot \ldots \cdot b_{N})$ and the surrogate CME could quickly become expensive as we increase the entries of $b$. In practical situations, however, the probability mass of the solution vector $\widetilde{\bm{p}}_{H}(t)$ tends to concentrate at a much smaller subset of states. It is therefore advantageous to approximate $\widehat{\bm{p}}_{H}(t)$ with a more compactly supported distribution.
+More precisely, let $\varepsilon > 0$ be an error tolerance (which we will keep small, $\varepsilon \leq 10^{-8}$ in our numerical tests), we can use a distribution $\widetilde{\bm{p}}_{\Omega}$ supported on $\Omega \subset H$ such that $\|\widehat{\bm{p}}_{H} - \widetilde{\bm{p}}_{\Omega}\| \leq \varepsilon$.
+The FSP approach mentioned in section~\ref{sec:fsp_background} could be reformulated as an adaptive time-stepping scheme that adaptive expands the support set $\Omega$ as the integration progresses. There have been many implementations of this idea~\cite{Munsky2007, Sidje2006, Wolf2010, Sidje2015}. We employ in this paper an implementation recently developed by Vo and Munsky~\cite{Vo2019parallel}, which we summarize below.
+
+The time interval of interest $[0, \tf]$ into subintervals $I_j := [t_j, t_{j+1}),\; j=0,\ldots,n_{step}-1$
+with $0:=t_0 < t_1 < \ldots < t_{n_{step}}:= \tf$.
+On each time subinterval $I_j$, the dense tensor $\widehat{\bm{p}}_{H}(t)$ that is the solution of the surrogate CME~\eqref{eq:surrogate_cme} could be approximated by a sparse tensor $\widetilde{\bm{p}}_{\Omega_j}(t)$ supported on $\Omega_j \subset H$ obtained from solving
+\begin{equation}
+  \label{eq:reduced_surrogate_cme}
+  \frac{d}{dt}{\widetilde{\bm{p}}_{\Omega_j}}(t)
+  =
+  \widetilde{\bm{A}}_{\Omega_j}\widetilde{\bm{p}}_{\Omega_j}(t),
+  \;
+  t \in [t_j, t_{j+1})
+\end{equation}
+where
+$$
+\widetilde{\bm{A}}_{\Omega_j}(\bm{y}, \bm{x}) =
+\begin{cases}
+  \widehat{\bm{A}}_{H}(\bm{y}, \bm{x}) \; \text{if } \bm{x}, \bm{y} \in \Omega_j \\
+  0 \; \text{otherwise}
+\end{cases}
+.
+$$
+Clearly, in solving~\eqref{eq:reduced_surrogate_cme} we only need to keep track of the equations corresponding to states in $\Omega_j$ and that reduces computational cost significantly.
+
+From the FSP error bound~\eqref{eq:fsp_error_bound}, we derive an error-control criteria of the form
+\begin{equation}
+  g_j(t) = 1 - \mathds{1}^T\widetilde{\bm{p}}_{\Omega_j}(t)
+  \leq
+  \frac{t}{\tf}\varepsilon.
+\end{equation}
+If at some $t \in [t_j, t_{j+1})$ we find that the inequality is not satisfied, more states are added to $\Omega_j$ and the integration starts again from $t_j$ until the criteria is satisfied over the whole interval. The determination of the time steps $t_{j}$ is left to the ODE integrator employed for solving eq.~\eqref{eq:reduced_surrogate_cme}.
+
+The state sets $\Omega_j$ are chosen as integral solutions of a set of inequality constraints. In particular, they have the form
+\begin{equation}
+  \label{eq:constrained_stateset}
+  \Omega_j
+  =
+  \left\{
+  \bm{x} \in H(b)
+  \vert
+  f_i(\bm{x}) \leq c_i^{(j)}
+  \right\},
+\end{equation}
+where $f_i$ are functions that are chosen a priori, and $c_i>0$ positive scalars. To expand $\Omega_j$, we simply increase $c_i^{(j)}$ and run a breadth-first-search routine to explore all reachable states that satisfy the relaxed inequality constraints. For more details, see~\cite{Vo2019parallel}.
+\subsection{Using the hierarchy of surrogate CMEs within the STMCMC framework}
+With the surrogate CME models formulated and their accurate approximations described in the previous two subsections, we now incorporate them to the multifidelity STMCMC framework.
+In particular, a hierarchy of surrogate models could be defined by a sequence of bounding vectors $\bm{b}^{(1)} \leq \bm{b}^{(2)} \leq \ldots \leq \bm{b}^{(K)}$ where the ``$\leq$" sign applies element-wise. The corresponding surrogate models $M_{\ell} := M(\bm{b}^{(\ell)})$ are then defined as in eq.~\eqref{eq:surrogate_cme}.
+As mentioned earlier, the error in the surrogate CMEs decrease monotonically as we increase the bounds. Therefore, $\{M_{\ell}\}$ forms a hiearchy in which each level attains more fidelity than its predecessor.
+
+At the $\ell$-th level, the log-likelihood function in eq.~\eqref{eq:full_logl} is approximated by
+\begin{equation}
+  L(\mathcal{D} \vert \theta)
+  \approx
+  L_{M_\ell}(\theta)
+  =
+  \sum_{i=1}^{T}
+  {
+    \sum_{j=1}^{n_i}
+    {
+      \log
+      p(
+        t_i, \min(\bm{c}_{j,i}, \bm{b}^{(\ell)})
+        \vert
+        M_{\ell}(\theta)
+      )
+    }
+  }
+  .
+\end{equation}
+In the surrogate log-likelihood, the data is projected onto the finite state space $H(\bm{b}_{\ell})$, and the probabilities are computed from the surrogate Markov model $M_{\ell}$. Clearly, as $\ell$ increases, the surrogate function $L_{M_{\ell}}(\theta)$ becomes a more accurate approximation to the true log-likelihood $L(\mathcal{D}\vert \theta)$.
+\section{Numerical examples}
+\subsection{Parameter inference for repressilator gene circuit}
+\def\TetR{\mathrm{TetR}}
+\def\lambdacI{\mathrm{\lambda{cI}}}
+\def\LacI{\mathrm{LacI}}
+We first consider a three-species model inspired by the well-known repressilator gene circuit~\cite{Elowitz2000}. This model consists of three species, $\TetR$, $\lambdacI$ and $\LacI$, which constitute a negative feedback network (Table~\ref{table:repressilator_reactions}).
+We simulate a dataset that consists of five measurement times $2, 4, 6, 8$, and $10$ minutes, with $1000$ cells measured at each time point. These numbers of single-cell measurements are typical of smFISH experiments~\cite{Raj2008, Kalb2019}.
+%
+We assume that all cells start at the state $\bm{x}_0 = (\TetR, \lambdacI, \LacI) = \left(0, 0, 0\right)$ at the initial time where there are no gene products.
+
+The hierarchy of surrogate CMEs (cf.~\eqref{eq:surrogate_cme}) is defined by the bounds
+$$
+b^{(\ell)}
+=
+\begin{bmatrix}
+  b_{\TetR}^{(\ell)} \\
+  \\
+  b_{\lambdacI}^{(\ell)} \\
+  \\
+  b_{\LacI}^{(\ell)}
+\end{bmatrix}
+=
+\begin{bmatrix}
+    \floor*{c_1 + (\ell-1)\frac{d_1 - c_1}{L_{\max} + 1}} \\
+    \\
+    \floor*{c_2 + (\ell-1)\frac{d_2 - c_2}{L_{\max} + 1}} \\
+    \\
+    \floor*{c_3 + (\ell-1)\frac{d_3 - c_3}{L_{\max} + 1}}
+\end{bmatrix}
+$$
+where $(c_1, c_2, c_3) = (20, 40, 40)$ and $(d_1, d_2, d_3) = (50, 100, 100)$, with $L_{\max} = 10$. Therefore, the multifidelity STMCMC will transit through ten levels, with the highest-fidelity model having a state space of size $51\times 101 \times 101$.
+
+We conduct parameter inference in $\log_{10}$-transformed space. The prior for the parameters are chosen to be a multivariate normal distribution (in $\log_{10}$ space) with a diagonal covariance matrix (see table~\ref{table:repressilator_posterior}).
+
+We ran both the STMCMC with the highest-fidelity surrogate CME and the multifidelity STMCMC on $29$ nodes, with $36$ cores per node.
+Fig.~\ref{fig:repressilator_performance} shows the time taken of each sampling scheme to reach a certain annealing level, with the multifidelity schemes with our proposed schemes outperforming the state-of-the-art fixed-fidelity ST-MCMC and Bridging schemes.
+Specifically, while the fixed-fidelity ST-MCMC took over $43$ hours to finish, the Multifidelity ST-MCMC with and without tuning took respectively only $7$ and $8.5$ hour, resulting in speedup factors of $6.1$ and $5$.
+
+Although the prior assigns a probability density of only about $8.766\times 10^{-20}$ to the true parameter vector, all samplers were able to bring the particles close to the true parameters (Fig.~\ref{fig:repressilator_sampling_history}). There is no notable difference in the shapes of the posterior distributions constructed from the samples of these two schemes (Fig.\ref{fig:repressilator_posteriors} and table~\ref{table:repressilator_posterior}).
+
+\begin{table}[H]
+  \centering
+  \begin{tabular}{r l l l}
+    \toprule
+    & reaction & propensity\\
+    \midrule
+    1. & $\emptyset \rightarrow \TetR$ & $k_0/(1 + a_0[\LacI]^{b_0})$  \\
+    2. & $\TetR \rightarrow \emptyset$ & $\gamma_0 [\TetR]$ \\
+    3. & $\emptyset \rightarrow \lambdacI$ & $k_1/(1 + a_1[\TetR]^{b_1})$  \\
+    4. & $\lambdacI \rightarrow \emptyset$ & $\gamma_1 [\lambdacI]$  \\
+    5. & $\emptyset \rightarrow \LacI$ & $k_2/(1 + a_2[\lambdacI]^{b_2})$  \\
+    6. & $\LacI \rightarrow \emptyset$ & $\gamma_2 [\LacI]$  \\
+    \bottomrule
+  \end{tabular}
+  \caption{Reactions and propensities in the repressilator model. ([X] is the number of copies of the species X.)}
+  \label{table:repressilator_reactions}
+\end{table}
+
+\begin{table}[H]
+  \centering
+  \begin{tabular}{l |r | r | r r r r}
+    \toprule
+    \makecell{Parameter}
+    &
+    True
+    &
+    Prior
+    &
+    \multicolumn{4}{c}{Posterior}
+    \\
+    &
+    &
+    &
+    Fixed
+    &
+    Bridge
+    &
+    Multi
+    &
+    Multi-Tuned
+     \\
+     \midrule
+     &
+     &
+     {mean $\pm$ std}
+     &
+     {mean $\pm$ std}
+     &
+     {mean $\pm$ std}
+     &
+     {mean $\pm$ std}
+     &
+     {mean $\pm$ std}
+     \\
+    \input{tables/repressilator_pos}
+\bottomrule
+  \end{tabular}
+  \caption{Model parameters in the repressilator example. The second column presents the parameters of the prior distribution, where we use a Gaussian prior in the $\log_{10}$-transformed parameter space with a diagonal covariance matrix. The last four columns present the posterior mean and standard deviation of model parameters estimated using four methods: fixed-fidelity ST-MCMC (Fixed), Bridging ST-MCMC (Bridge), Multifidelity ST-MCMC (Multi), and Multifidelity ST-MCMC with $\beta$-tuning (Multi-Tuned).}
+  \label{table:repressilator_posterior}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[scale=0.75]{figs/repressilator_performance}
+  \caption{Performance of STMCMC samplers on the repressilator example. The horizontal axis represent the inverse temperature.}
+  \label{fig:repressilator_performance}
+\end{figure}
+
+
+\begin{figure}[H]
+\centering
+\includegraphics[scale=0.75]{figs/repressilator_marginal_posteriors.pdf}
+\caption{Prior and posterior densities in the repressilator example. The prior is shown in grey, and the posterior densities are estimated from four different formulations of the ST-MCMC: fixed fidelity (Fixed), multifidelity with only bridging (Bridge), multifidelity without $\beta$-tuning (Multifidelity), and multifidelity with $\beta$-tuning (Multifidelity-Tuned).
+ See table~\ref{table:repressilator_posterior} for the estimated posterior mean and standard deviation for all parameters.}
+  \label{fig:repressilator_posteriors}
+\end{figure}
+
+\begin{figure}[H]
+  \includegraphics[scale=0.75]{figs/repressilator_evolution}
+  \caption{Evolution of the population of samples for model parameters using four different ST-MCMC variants: fixed-fidelity (Fixed), multifidelity with only bridging (Bridge), multifidelity without $\beta$-tuning (Multifidelity), and multifidelity with $\beta$-tuning (Multifidelity-Tuned). The solid lines represent the history of the sample means. The area of the mean $\pm$ standard deviation is presented in the shaded region.}
+  \label{fig:repressilator_sampling_history}
+\end{figure}
+
+\subsection{Bayesian comparison of comparmental models of gene expression}
+We explore next the application of multifidelity STMC to the problem of model selection.
+We consider an extension of a class of multi-state gene expression that is used to model several housekeeping genes.
+The reaction network consists of a gene that could switch between an inactivated state $G_0$ and several activated states $G_i$, $i=1,\ldots,n_{G}-1$. When activated, these gene can be transcribed into RNA molecules within the nucleus at the rate of $r_{i}$ molecule/minute on average.
+These nuclear mRNA molecules are then transported into the cytoplasm at a rate of $k_{trans}$ molecule/min, where they degrade at the probabilistic rate $\gamma$ molecule/minute.
+Overall, the model consists of $n_{G} + 2$ species: genes that are at different states, nuclear mRNA and cytoplasmic mRNA. These molecular species that can go through $3n_G + 1$ reaction channels~\ref{table:gene_expression_reactions}.
+%
+Using single-cell an experimental technique known as smFISH in comparison with image segmentation, biologists can obtain the copy numbers of the nuclear and cytoplasmic mRNA species, but not the state of the gene itself. Given such dataset, the model selection problem is to decide the number $n_{G}$ of gene states that best explain the observed data.
+
+We simulate a dataset based on the model with $n_{G}:=3$, which consists of $200$ single-cell measurements for each time point $t\in \{ 2, 4, 6, 8, 10 \}$ (with hour as time unit). We then use the multifidelity STMC to estimate the model evidence for three classes of reaction networks that consist of two, three, and four gene states.
+
+\begin{table}
+  \begin{tabular}{llr}
+      \toprule
+      & reaction & propensity \\
+      \midrule
+      $1,\ldots,n_{G} $
+      & $G_{i-1} \rightarrow G_{i}$, $i=1,\ldots, n_{G}-1$
+      & $k_{i-1}^{+}[G_{i-1}]$
+      \\
+      $n_{G}+1,\ldots,2n_{G}$
+      & $G_{i} \rightarrow G_{i-1}$, $i=1,\ldots,n_{G}-1$
+      & $k_{i}^{-}[G_{i}]$
+      \\
+      $2n_{G}+1, \ldots, 3n_{G}-1$
+      & $G_i \rightarrow G_i + \text{RNA}_{nuc}$ , $i = 1,\ldots, n_{G}-1$
+      & $r_{i}[G_i]$
+      \\
+      $3n_{G}$ & $\text{RNA}_{nuc}\rightarrow \text{RNA}_{cyt}$
+      & $k_{trans}[\text{RNA}_{nuc}]$
+      \\
+      $3n_{G}+1$ & $\text{RNA}_{cyt} \rightarrow \emptyset$ & $\gamma[\text{RNA}_{cyt}]$
+      \\
+      \bottomrule
+  \end{tabular}
+  \caption{
+    Reactions and propensities in the compartmental gene expression model.
+  }
+  \label{table:gene_expression_reactions}
+\end{table}
+
+\subsection{Stochastic transcription of the inflammation response gene IL1beta}
+Having explored the performance of the multifidelity STMCMC-FSP scheme on theoretical examples with simulated datasets, we devote the last example to illustrating the application of our method on modeling real datasets.
+We consider the expression of the IL1beta gene in response to LPS stimulation that was studied in Kalb et al.~\cite{Kalb2019}.
+%
+The dataset consists of mRNA counts for IL1beta measured right before, as well as those at $30$ minutes, $1$, $2$, and $4$ hour after applying LPS stimulation.
+%
+We consider a three-state gene expression model with a time-varying deactivation rate.
+%
+The strength of the LPS signal is modeled by the function of the form
+$$
+S(t) = \exp(-r_1 t)\left(1 - \exp(-r_2 t)\right).
+$$
+%
+
+We assume the initial state $(2,0,0,0)$ at the observed mRNA counts are drawn from the solutions of the CME at times $T_0 + \{0, 0.5, 1, 2, 4\}$ hour, where the time offset $T_0$ is yet another parameter to be estimated.
+%
+Thus, the parameter vector consists of $11$ components.
+
+\section{Conclusion}
+\section*{Acknowledgement}
+We thank James Werner and Daniel Kalb for kindly sharing with us the data from their smFISH experiment, and Ania Baetica for constructive comments on the manuscript.
+\bibliographystyle{plain}
+\bibliography{library}
+\end{document}

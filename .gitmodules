@@ -1,0 +1,6 @@
+[submodule "pacmensl"]
+	path = pacmensl
+	url = https://github.com/voduchuy/pacmensl.git
+[submodule "pypacmensl"]
+	path = pypacmensl
+	url = https://github.com/voduchuy/pypacmensl.git
