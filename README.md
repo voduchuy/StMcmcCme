@@ -1,3 +1,3 @@
-# st-mcmc-cme
+# StMcmcCme
 
 Explore the application of ST-MCMC for Bayesian inference and reduced order/surrogate models to CME models.
