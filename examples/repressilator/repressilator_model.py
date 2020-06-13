@@ -122,6 +122,7 @@ class RepressilatorModel:
             solver.SetModel(self.stoich_mat, t_fun, prop)
             solver.SetFspShape(None, self.constr_init)
             solver.SetInitialDist(self.x0, p0)
+            solver.SetOdeSolver("KRYLOV")
             solver.SetUp()
             solutions = solver.SolveTspan(self.t_meas, 1.0e-8)
             solver.ClearState()
