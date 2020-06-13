@@ -9,7 +9,7 @@ from stmcmc import (
     StMcmcSingleFidelity,
     StMcmcMultiFidelityITTuned,
     StMcmcMultiFidelityEssBridge,
-    StMcmcMultiFidelityIT
+    StMcmcMultiFidelityIT,
 )
 
 # %%
@@ -67,7 +67,7 @@ if __name__ == "__main__":
         model.loglike,
         dataz,
         theta0,
-        f"il1beta_mcmc_full.npz",
+        f"il1beta_{output_appendix}.npz",
         num_samples_global,
         num_surrogates - 1,
     )

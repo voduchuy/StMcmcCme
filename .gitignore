@@ -2,3 +2,5 @@
 */\*.DS_Store
 .idea
 *.pdf
+*.pyc
+tests/poisson_mcmc.npz

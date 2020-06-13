@@ -28,12 +28,12 @@ if __name__ == "__main__":
     cput_multi_petsc = np.zeros((model.num_surrogates,))
     cput_multi_cvode = np.zeros((model.num_surrogates,))
     for i in range(0, model.num_surrogates):
-        model.ode_solver = "petsc"
+        model.ODE_METHOD = "petsc"
         t1 = mpi.Wtime()
         model.solve_model(log10theta, i)
         cput_multi_petsc[i] = mpi.Wtime() - t1
 
-        model.ode_solver = "cvode"
+        model.ODE_METHOD = "cvode"
         t2 = mpi.Wtime()
         model.solve_model(log10theta, i)
         cput_multi_cvode[i] = mpi.Wtime() - t2

@@ -1,8 +1,8 @@
 # coding: utf-8
 import numpy as np
-import copy
 import time
 from mpi4py import MPI
+from typing import Tuple
 
 
 class StMcmcMultiFidelityIT:
@@ -588,3 +588,187 @@ class StMcmcMultiFidelityIT:
 
             if local_beta >= 1.0:
                 break
+
+    def _compute_next_beta(
+        self, loglike: np.ndarray, beta_prev: float
+    ) -> Tuple[float, np.ndarray]:
+        """
+        Helper function to determine the next inverse temperature.
+
+        Parameters
+        ----------
+        loglike : 1-d numpy array
+            loglikelihood values of current samples.
+
+        beta_prev : float
+            previous value of beta (i.e., the inverse temperature).
+
+        Returns
+        -------
+
+        beta_next : float
+            the next value for the inverse temperature.
+
+        """
+        nsamp = len(loglike)
+
+        dbeta0 = 0.0
+        dbeta1 = 1.0
+
+        maxl = max(loglike)
+        odbeta = 10.0
+        ddbeta = odbeta
+
+        while ddbeta > (10.0 ** (-10.0)):
+            dbeta = (dbeta0 + dbeta1) / 2.0
+
+            wi = np.divide(
+                np.exp(dbeta * (loglike - maxl)),
+                sum(np.exp(dbeta * (loglike - maxl))),
+            )
+            fi = (
+                np.sqrt(1.0 / nsamp * sum(np.power(wi - np.mean(wi), 2)))
+                / np.mean(wi)
+                - self.targcov_
+            )
+
+            if fi <= 0.0:
+                dbeta0 = dbeta
+            else:
+                dbeta1 = dbeta
+
+            ddbeta = np.abs(odbeta - dbeta)
+            odbeta = dbeta
+
+        if beta_prev + dbeta >= 1.0:
+            dbeta = 1.0 - beta_prev
+            wi = np.divide(
+                np.exp(dbeta * (loglike - maxl)),
+                sum(np.exp(dbeta * (loglike - maxl))),
+            )
+            beta_next = 1.0
+        else:
+            beta_next = beta_prev + dbeta
+        return beta_next, wi
+
+    def _scatter_data(self, send_data: np.ndarray, mode: str = "forward"):
+        """
+        Convenient method to scatter/gather data from root to other processors. This is required at various steps of the sampling process.
+
+        Parameters
+        ----------
+
+        send_data : numpy array
+            data to be communicated. Must follow 'C' ordering. The first dimension must be the 'batch' dimension,
+            i.e.,
+            data.shape[0] is
+            the number of entities (samples, numbers,...) to be communicated across processors.
+
+        mode : str (default: "forward")
+            if "forward", scatter data from root to other processors. Otherwise, gather data from all processes
+            into the root.
+
+        Returns
+        -------
+
+        recv_data: numpy array
+            data received on each proces.
+
+        """
+        comm = self.comm_
+        rank = comm.Get_rank()
+        num_procs = comm.Get_size()
+
+        if mode == "forward":
+            if rank == 0:
+                num_samples_per_cpu = send_data.shape[0]
+                data_type = send_data.dtype
+                if len(send_data.shape) == 1:
+                    sample_dim = 1
+                    sample_shape = ()
+                else:
+                    sample_dim = int(np.prod(send_data.shape[1:]))
+                    sample_shape = list(send_data.shape[1:])
+            else:
+                num_samples_per_cpu = None
+                sample_dim = None
+                data_type = None
+                sample_shape = None
+            sample_dim = comm.bcast(sample_dim)
+            data_type = comm.bcast(data_type)
+            num_samples_per_cpu = comm.bcast(num_samples_per_cpu)
+            sample_shape = tuple(comm.bcast(sample_shape))
+
+            counts = None
+            displacements = None
+            if rank == 0:
+                counts = (
+                    sample_dim
+                    * (num_samples_per_cpu // num_procs)
+                    * np.ones(num_procs, dtype=int)
+                )
+                displacements = np.zeros((num_procs,), dtype=int)
+                displacements[1:] = np.cumsum(counts[0:-1])
+
+            recv_data = np.zeros(
+                (num_samples_per_cpu // num_procs,) + sample_shape,
+                dtype=data_type,
+            )
+
+            comm.Scatterv(
+                [
+                    send_data,
+                    counts,
+                    displacements,
+                    MPI._typedict[data_type.char],
+                ],
+                recv_data,
+                root=0,
+            )
+        else:  # gather mode
+            num_samples_per_cpu = send_data.shape[0]
+            data_type = send_data.dtype
+            if len(send_data.shape) == 1:
+                sample_shape = ()
+                sample_dim = 1
+            else:
+                sample_shape = send_data.shape[1:]
+                sample_dim = int(np.prod(send_data.shape[1:]))
+
+            sample_dim = comm.bcast(sample_dim)
+            data_type = comm.bcast(data_type)
+
+            send_counts = num_samples_per_cpu * sample_dim
+
+            if rank == 0:
+                receive_counts = (
+                    num_samples_per_cpu
+                    * sample_dim
+                    * np.ones(num_procs, dtype=int)
+                )
+                receive_displacements = np.zeros((num_procs,), dtype=int)
+                receive_displacements[1:] = np.cumsum(receive_counts[0:-1])
+            else:
+                receive_counts = None
+                receive_displacements = None
+
+            # send core information to the root
+            recv_data = None
+            if rank == 0:
+                recv_data = np.zeros(
+                    (num_samples_per_cpu * num_procs,) + sample_shape,
+                    dtype=data_type,
+                )
+
+            comm.Gatherv(
+                [send_data, send_counts, MPI._typedict[data_type.char]],
+                [
+                    recv_data,
+                    receive_counts,
+                    receive_displacements,
+                    MPI._typedict[data_type.char],
+                ],
+                root=0,
+            )
+
+        return recv_data

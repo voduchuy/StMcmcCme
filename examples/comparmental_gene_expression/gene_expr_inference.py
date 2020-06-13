@@ -71,7 +71,7 @@ if __name__ == "__main__":
         model.loglike,
         dataz,
         theta0,
-        f"gene_expression_{num_gene_states}_mcmc_full.npz",
+        f"gene_expression_{num_gene_states}_{output_appendix}.npz",
         num_samples_global,
         num_surrogates - 1,
     )

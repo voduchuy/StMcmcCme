@@ -32,17 +32,11 @@ if __name__ == "__main__":
     ARGV = sys.argv
 
     if len(ARGV) > 1:
-        num_gene_states = int(ARGV[1])
-    else:
-        num_gene_states = 2
-
-    if len(ARGV) == 3:
-        method = ARGV[2].lower()
+        method = ARGV[1].lower()
     else:
         method = "full"
 
     if mpi.COMM_WORLD.Get_rank() == 0:
-        print(f"Number of gene states: {num_gene_states} \n")
         print(f"Method: {method}")
 
     model = RepressilatorModel()
@@ -74,7 +68,7 @@ if __name__ == "__main__":
         model.loglike,
         dataz,
         theta0,
-        f"gene_expression_{num_gene_states}_mcmc_full.npz",
+        f"repressilator_{output_appendix}.npz",
         num_samples_global,
         num_surrogates - 1,
     )

@@ -69,10 +69,9 @@ class GeneExpressionModel:
         # # kr_{1}, ..., kr_{num_gene_states-1}, ktrans, deg]
         self.num_parameters = 3 * (num_gene_states - 1) + 2
 
-    def prop_factory(self, surrogate_id):
+    def prop_factory(self, theta, surrogate_id):
 
         copymax = self.copymaxs[surrogate_id]
-        print(copymax)
 
         def propensity(reaction, x, out):
             active_states = (x[:, -1] < copymax) * (x[:, -2] < copymax)
@@ -102,14 +101,9 @@ class GeneExpressionModel:
                 out[:] = x[:, -2] * active_states
             if reaction == 3 * (self.num_gene_states - 1) + 1:
                 out[:] = x[:, -1] * active_states
+            out[:] = theta[reaction] * out[:]
 
         return propensity
-
-    def t_fun_factory(self, theta):
-        def t_fun(t, out):
-            out[:] = theta[:]
-
-        return t_fun
 
     def load_data(self, surrogate_id):
         npzdat = np.load("gene_expression_data.npz")
@@ -146,27 +140,26 @@ class GeneExpressionModel:
     def loglike(self, log10_thetas, dataz, surrogate_id):
         thetas = np.power(10.0, log10_thetas)
         nsamp = thetas.shape[0]
-        loglike = np.zeros((nsamp, 1))
+        loglike_values = np.zeros((nsamp, 1))
         data = dataz[surrogate_id]
 
         for jnc in range(0, nsamp):
-            t_fun = self.t_fun_factory(thetas[jnc, :])
-            prop = self.prop_factory(surrogate_id)
+            prop = self.prop_factory(thetas[jnc, :], surrogate_id)
             solver = FspSolverMultiSinks(mpi.COMM_SELF)
-            solver.SetModel(self.stoich_mat, t_fun, prop)
+            solver.SetModel(self.stoich_mat, None, prop)
             solver.SetFspShape(None, self.constr_init)
             solver.SetInitialDist(self.x0, self.p0)
-            solver.SetUp()
+            solver.SetOdeSolver("KRYLOV")
+            solver.SetKrylovOrthLength(2)
             solutions = solver.SolveTspan(t_meas, 1.0e-8)
-            solver.ClearState()
             ll = 0.0
             for i in range(0, len(t_meas)):
                 ll = ll + data[i].LogLikelihood(
                     solutions[i],
                     np.array([self.num_gene_states, self.num_gene_states + 1]),
                 )
-            loglike[jnc, 0] = ll
-        return loglike
+            loglike_values[jnc, 0] = ll
+        return loglike_values
 
 
 def simulate_data(t_meas, n_cells):

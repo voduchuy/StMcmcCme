@@ -11,13 +11,9 @@ class RepressilatorModel:
     t_meas = np.linspace(10.0 / 5, 10.0, 5)
     n_cells = 1000
 
-    stoich_mat = np.array([[1, 0, 0],
-                           [-1, 0, 0],
-                           [0, 1, 0],
-                           [0, -1, 0],
-                           [0, 0, 1],
-                           [0, 0, -1]
-                            ])
+    stoich_mat = np.array(
+        [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
+    )
 
     x0 = np.array([[0, 0, 0]])
     constr_init = np.array([10, 10, 10])
@@ -25,9 +21,9 @@ class RepressilatorModel:
     # % Max number of molecules in the 'hard' FSP reduction
     num_surrogates = 10
     copymaxs = np.zeros((3, num_surrogates), dtype=int)
-    copymaxs[0,:] = np.linspace(20, 50, num_surrogates, dtype=int)
-    copymaxs[1,:] = np.linspace(40, 100, num_surrogates, dtype=int)
-    copymaxs[2,:] = np.linspace(40, 100, num_surrogates, dtype=int)
+    copymaxs[0, :] = np.linspace(20, 50, num_surrogates, dtype=int)
+    copymaxs[1, :] = np.linspace(40, 100, num_surrogates, dtype=int)
+    copymaxs[2, :] = np.linspace(40, 100, num_surrogates, dtype=int)
 
     k0_true = 10.0
     gamma0_true = 0.01
@@ -42,10 +38,27 @@ class RepressilatorModel:
     a2_true = 0.05
     b2_true = 3.0
 
-    theta_true = np.array([k0_true, gamma0_true, a0_true, b0_true, k1_true, gamma1_true, a1_true, b1_true, k2_true, gamma2_true, a2_true, b2_true])
+    theta_true = np.array(
+        [
+            k0_true,
+            gamma0_true,
+            a0_true,
+            b0_true,
+            k1_true,
+            gamma1_true,
+            a1_true,
+            b1_true,
+            k2_true,
+            gamma2_true,
+            a2_true,
+            b2_true,
+        ]
+    )
 
     # Reference parameter, this is an initial guess for the true parameter
-    theta_ref = np.array([10.0, 0.1, 0.1, 0.1, 10.0, 0.1, 0.1, 0.1, 10.0, 0.1, 0.1, 0.1])
+    theta_ref = np.array(
+        [10.0, 0.1, 0.1, 0.1, 10.0, 0.1, 0.1, 0.1, 10.0, 0.1, 0.1, 0.1]
+    )
 
     def __init__(self):
         print("Repressilator model")
@@ -57,17 +70,23 @@ class RepressilatorModel:
 
         def propensity(reaction, x, out):
             if reaction == 0:
-                out[:] = k0/(1.0 + a0*x[:,1]**b0)*(x[:, 0] < copymax[0])
+                out[:] = (
+                    k0 / (1.0 + a0 * x[:, 1] ** b0) * (x[:, 0] < copymax[0])
+                )
             if reaction == 1:
-                out[:] = gamma0*x[:, 0]
+                out[:] = gamma0 * x[:, 0]
             if reaction == 2:
-                out[:] = k1/(1.0 + a1*x[:,2]**b1)*(x[:, 1] < copymax[1])
+                out[:] = (
+                    k1 / (1.0 + a1 * x[:, 2] ** b1) * (x[:, 1] < copymax[1])
+                )
             if reaction == 3:
-                out[:] = gamma1*x[:,1]
+                out[:] = gamma1 * x[:, 1]
             if reaction == 4:
-                out[:] = k2/(1.0 + a2*x[:,0]**b2)*(x[:, 2] < copymax[2])
+                out[:] = (
+                    k2 / (1.0 + a2 * x[:, 0] ** b2) * (x[:, 2] < copymax[2])
+                )
             if reaction == 5:
-                out[:] = gamma2*x[:, 2]
+                out[:] = gamma2 * x[:, 2]
 
         return propensity
 
@@ -78,8 +97,8 @@ class RepressilatorModel:
         return t_fun
 
     def load_data(self, modelid):
-        npzdat = np.load('repressilator_data.npz')
-        X = npzdat['arr_0']
+        npzdat = np.load("repressilator_data.npz")
+        X = npzdat["arr_0"]
         data = []
         copymax = self.copymaxs[:, modelid]
 
@@ -101,7 +120,12 @@ class RepressilatorModel:
         nsamp = log10_thetas.shape[0]
         lp = np.zeros((1, nsamp))
         for i in range(0, 12):
-            lp = lp - 1.0 / (2 * self.sigma0 * self.sigma0) * (log10_thetas[:, i] - self.mu0[i]) ** 2
+            lp = (
+                lp
+                - 1.0
+                / (2 * self.sigma0 * self.sigma0)
+                * (log10_thetas[:, i] - self.mu0[i]) ** 2
+            )
 
         return lp.T
 
@@ -115,20 +139,18 @@ class RepressilatorModel:
         solver = FspSolverMultiSinks(mpi.COMM_SELF)
         for jnc in range(0, nsamp):
             p0 = np.array([1.0])
-
-            t_fun = self.t_fun_factory(thetas[jnc, :])
             prop = self.prop_factory(thetas[jnc, :], modelid)
-
-            solver.SetModel(self.stoich_mat, t_fun, prop)
+            solver.SetModel(self.stoich_mat, None, prop)
             solver.SetFspShape(None, self.constr_init)
             solver.SetInitialDist(self.x0, p0)
             solver.SetOdeSolver("KRYLOV")
-            solver.SetUp()
+            solver.SetKrylovOrthLength(2)
             solutions = solver.SolveTspan(self.t_meas, 1.0e-8)
-            solver.ClearState()
             ll = 0.0
             for i in range(0, len(self.t_meas)):
-                ll = ll + data[i].LogLikelihood(solutions[i], np.array([0, 1, 2]))
+                ll = ll + data[i].LogLikelihood(
+                    solutions[i], np.array([0, 1, 2])
+                )
             loglike[jnc, 0] = ll
         return loglike
 
@@ -136,12 +158,18 @@ class RepressilatorModel:
         """Simulate SmFish observations"""
         # For generating Data high copy max
         ssa = SSASolver(mpi.COMM_SELF)
-        ssa.SetModel(self.stoich_mat, self.t_fun_factory(self.theta_true), self.prop_factory(self.theta_true, self.num_surrogates-1))
+        ssa.SetModel(
+            self.stoich_mat,
+            self.t_fun_factory(self.theta_true),
+            self.prop_factory(self.theta_true, self.num_surrogates - 1),
+        )
         observations = []
         for t in t_meas:
-            observations.append(ssa.Solve(t, self.x0, n_cells, send_to_root=True))
+            observations.append(
+                ssa.Solve(t, self.x0, n_cells, send_to_root=True)
+            )
 
-        np.savez('repressilator_data', observations)
+        np.savez("repressilator_data", observations)
 
 
 if __name__ == "__main__":
@@ -150,11 +178,14 @@ if __name__ == "__main__":
     np.random.seed(rank)
     if rank == 0:
         model.simulate_data(model.t_meas, model.n_cells)
-        with np.load('repressilator_data.npz', allow_pickle=True) as data:
-            observations = data['arr_0']
+        with np.load("repressilator_data.npz", allow_pickle=True) as data:
+            observations = data["arr_0"]
 
-        pairs = [[0,1], [1,2], [2,0]]
-        fig, axes = plt.subplots(1,3)
+        pairs = [[0, 1], [1, 2], [2, 0]]
+        fig, axes = plt.subplots(1, 3)
         for i in range(0, len(pairs)):
-            axes[i].scatter(observations[len(model.t_meas)-1][:,pairs[i][0]], observations[len(model.t_meas)-1][:,pairs[i][1]])
+            axes[i].scatter(
+                observations[len(model.t_meas) - 1][:, pairs[i][0]],
+                observations[len(model.t_meas) - 1][:, pairs[i][1]],
+            )
         plt.show()

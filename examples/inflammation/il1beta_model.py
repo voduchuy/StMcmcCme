@@ -60,8 +60,8 @@ class Il1bModel:
     num_surrogates = 10
     copymaxs = 10 + 2 ** (np.arange(0, num_surrogates) + 2)
     copymaxs = np.array(copymaxs, dtype=int)
-    print(copymaxs)
-    ode_solver = "petsc"
+
+    ODE_METHOD = "petsc"
 
     def __init__(self):
         print("Il1beta model.\n")
@@ -112,20 +112,17 @@ class Il1bModel:
         copymax = self.copymaxs[modelid]
         constr_init = np.array([2, 2, 2, 5, copymax])
         propensity_t, propensity_x = self.propensity_factory(theta, modelid)
-        SOLVER0 = FspSolverMultiSinks(mpi.COMM_SELF)
-        SOLVER0.SetModel(self.STOICH_MATRIX, propensity_t, propensity_x, [1])
-        SOLVER0.SetFspShape(
+        fsp_solver = FspSolverMultiSinks(mpi.COMM_SELF)
+        fsp_solver.SetModel(self.STOICH_MATRIX, propensity_t, propensity_x, [1])
+        fsp_solver.SetFspShape(
             constr_fun=fsp_constr,
             constr_bound=constr_init,
             exp_factors=np.array([0.0, 0.0, 0.0, 0.2, 0.0]),
         )
-        SOLVER0.SetInitialDist(self.X0, self.P0)
-        SOLVER0.SetOdeSolver(self.ode_solver)
-        SOLVER0.SetOdeTolerances(1.0e-4, 1.0e-10)
-        # SOLVER0.SetVerbosity(2)
-        SOLVER0.SetUp()
-        solutions = SOLVER0.SolveTspan(self.t_meas + theta[-1], 1.0e-8)
-        SOLVER0.ClearState()
+        fsp_solver.SetInitialDist(self.X0, self.P0)
+        fsp_solver.SetOdeSolver(self.ODE_METHOD)
+        fsp_solver.SetOdeTolerances(1.0e-4, 1.0e-10)
+        solutions = fsp_solver.SolveTspan(self.t_meas + theta[-1], 1.0e-8)
         return solutions
 
     def loglike(self, log10_thetas, dataz, modelid):
