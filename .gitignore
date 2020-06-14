@@ -5,3 +5,4 @@
 *.pdf
 *.pyc
 tests/poisson_mcmc.npz
+*/\*.npz
