@@ -6,20 +6,16 @@ from typing import Tuple
 
 
 class StMcmcMultiFidelityIT:
+    """Multifidelity Sequential Tempered MCMC based on information-theoretic criteria."""
+
     def __init__(self, comm=MPI.COMM_WORLD):
         self.comm_ = comm.Dup()
         self.num_procs_ = comm.Get_size()
         self.rank_ = comm.Get_rank()
-        self.nsamp_ = 1044
-        self.ncores_ = self.num_procs_
-        self.max_num_steps_ = 1000
         self.targcov_ = 1.0
         self.learnlev_ = 1
         self.nchain_ = 1
         self.step_ = 1
-        self.logprior_ = []
-        self.loglike_ = []
-        self.maxcount_ = 100
 
     def Run(
         self,
@@ -28,27 +24,67 @@ class StMcmcMultiFidelityIT:
         data,
         init_thetas,
         outfile=None,
-        nsamp=128,
+        num_samples=128,
         max_level=0,
         max_num_steps=1000,
         maxcount=100,
     ):
+        """
+        Sample from the posterior distribution using the information-based STMCMC sampler.
+
+        Parameters
+        ----------
+        logprior_fun : Callable
+            Function to evaluate the logarithm (base 10) of the prior.
+            Syntax: y = logprior_fun(thetas), where thetas is an array of samples, arranged row-wise, and y is an
+            array of shape (number of samples, 1).
+
+        loglike_fun : Callable
+            Function to evaluate the logarithm (base 10) of the likelihood.
+            Syntax:
+
+        data : Any
+            Object that contains the data needed for the likelihood evaluation.
+
+        init_thetas: np.ndarray
+            Samples from the prior. Could be None if start_new == False.
+
+        outfile : str
+            Name of the output file for the chains.
+
+        num_samples : int
+            Total number of samples. This number must be divisible by the number of calling processors.
+
+        max_level : int
+            Identity of the highest-fidelity model in the multifidelity hierarchy. The sampler will gradually explore from the coarsest model up to this level.
+
+        max_num_steps : int
+            Maximum number of tempering and bridging steps.
+
+        maxcount : int
+            Maximum number of MCMC iterations in the rejunevation phase.
+
+        Returns
+        -------
+
+            None
+
+        Notes
+        -----
+
+        This method must be called by all processes that own the class.
+
+        """
         if outfile is None:
             outfile = "stmcmc_test.npz"
 
         if type(outfile) != str:
             raise RuntimeError("Output filename must be a string!")
 
-        theta = init_thetas
-        self.nsamp_ = nsamp
-        self.max_num_steps_ = max_num_steps
-        self.maxcount_ = maxcount
+        thetas = init_thetas
 
         # make each rank of its own seed
         np.random.seed(int(time.time()) + self.rank_)
-
-        self.logprior_ = logprior_fun
-        self.loglike_ = loglike_fun
 
         if self.rank_ == 0:
             tevals = np.zeros(1)
@@ -58,24 +94,12 @@ class StMcmcMultiFidelityIT:
 
         # if you are rank 0 generate the parameters and evaluate the prior
         ndim = None
-        sendtheta = None
-        counts = None
-        dspls = None
         modelid = None
 
         if self.rank_ == 0:
-            # theta = prior_gen(nsamp)
-            sendtheta = theta[:, :, 0]
-            stheta = np.copy(theta)
-            ploglike = self.logprior_(theta[:, :, 0])
-            ndim = theta.shape[1]
-            counts = (
-                ndim
-                * nsamp
-                // self.num_procs_
-                * np.ones(self.num_procs_, dtype=int)
-            )
-            dspls = range(0, nsamp * ndim, ndim * nsamp // self.num_procs_)
+            stheta = np.copy(thetas)
+            ploglike = logprior_fun(thetas[:, :, 0])
+            ndim = thetas.shape[1]
             modelid = 0
 
         # send dimension information to everyone
@@ -84,38 +108,21 @@ class StMcmcMultiFidelityIT:
         # send model id to start with
         modelid = self.comm_.bcast(modelid, root=0)
 
-        # holder for everyone to recive there part of the theta vector
-        recvtheta = np.zeros((nsamp // self.num_procs_, ndim))
-
-        # get your theta values to use for computing th loglike
-        self.comm_.Scatterv(
-            [sendtheta, counts, dspls, MPI.DOUBLE], recvtheta, root=0
-        )
-
-        # compute on the loglike on each core
-        sendloglike = self.loglike_(recvtheta, data, modelid)
-
-        scounts = nsamp // self.num_procs_
-        rcounts = nsamp // self.num_procs_ * np.ones(self.num_procs_, dtype=int)
-        rdspls = range(0, nsamp, nsamp // self.num_procs_)
-
-        # send core information to the root
-        recvloglike = None
+        # distribute loglikelihood computation across processes and gather and the root process
         if self.rank_ == 0:
-            recvloglike = np.zeros(nsamp)
-
-        self.comm_.Gatherv(
-            [sendloglike, scounts, MPI.DOUBLE],
-            [recvloglike, rcounts, rdspls, MPI.DOUBLE],
-            root=0,
-        )
+            sendtheta = thetas[:, :, 0]
+        else:
+            sendtheta = None
+        recvtheta = self._scatter_data(sendtheta, "forward")
+        sendloglike = loglike_fun(recvtheta, data, modelid)
+        recvloglike = self._scatter_data(sendloglike, "backward")
 
         # define various variables we will need on the root node
         if self.rank_ == 0:
-            loglike = np.zeros((nsamp, 1))
-            loglike[:, 0] = recvloglike
+            loglike = np.zeros((num_samples, 1))
+            loglike[:, 0] = recvloglike[:, 0]
 
-            beta = np.zeros(1)
+            betas = np.zeros(1)
             acr = np.zeros(1)
             rho = np.zeros(1)
             scal = np.zeros(1)
@@ -125,102 +132,31 @@ class StMcmcMultiFidelityIT:
 
         # everyone needs targrho
         targrho = 0.6
-        for istep in range(0, self.max_num_steps_):
+        for istep in range(0, max_num_steps):
             oldmodel = modelid
-            # before we start lets have everyone compute the full model so we can look at whether we need to change
+
+            # limited evaluations the highest fidelity model-for deciding when to switch low-fidelity model
             if modelid != max_level:
+                # distribute max-fidelity likelihood computation on all processes and gather to the root
                 sendtheta = None
-                counts = None
-                dspls = None
-
                 if self.rank_ == 0:
-                    sendtheta = np.copy(theta[:, :, istep])
-                    counts = (
-                        ndim
-                        * nsamp
-                        // self.num_procs_
-                        * np.ones(self.num_procs_, dtype=int)
-                    )
-                    dspls = range(
-                        0, nsamp * ndim, ndim * nsamp // self.num_procs_
-                    )
+                    sendtheta = np.copy(thetas[:, :, istep])
+                recvtheta = self._scatter_data(sendtheta, "forward")
+                sendloglike = loglike_fun(recvtheta, data, max_level)
+                fullloglike = self._scatter_data(sendloglike, "backward")
 
-                # holder for everyone to recive there part of the theta vector
-                recvtheta = np.zeros((nsamp // self.num_procs_, ndim))
-
-                # get your theta values to use for computing th loglike
-                self.comm_.Scatterv(
-                    [sendtheta, counts, dspls, MPI.DOUBLE], recvtheta, root=0
-                )
-
-                # compute on the loglike on each core using the find modelid
-                sendloglike = self.loglike_(recvtheta, data, max_level)
-
-                scounts = nsamp // self.num_procs_
-                rcounts = (
-                    nsamp
-                    // self.num_procs_
-                    * np.ones(self.num_procs_, dtype=int)
-                )
-                rdspls = range(0, nsamp, nsamp // self.num_procs_)
-
-                # send core information to the root
-                fullloglike = None
-                if self.rank_ == 0:
-                    fullloglike = np.zeros(nsamp)
-
-                self.comm_.Gatherv(
-                    [sendloglike, scounts, MPI.DOUBLE],
-                    [fullloglike, rcounts, rdspls, MPI.DOUBLE],
-                    root=0,
-                )
-
-            # if you are root compute the new beta
+            # DETERMINE THE NEXT TEMPERATURE AND MODEL FIDELITY LEVEL
             if self.rank_ == 0:
-                dbeta0 = 0.0
-                dbeta1 = 1.0
+                # if you are root compute the new betas
+                beta_next, wi = self._compute_next_beta(
+                    loglike[:, istep], betas[istep]
+                )
+                betas = np.append(betas, beta_next)
 
-                maxl = max(loglike[:, istep])
-                odbeta = 10.0
-                ddbeta = odbeta
-
-                while ddbeta > (10.0 ** (-10.0)):
-                    dbeta = (dbeta0 + dbeta1) / 2.0
-
-                    wi = np.divide(
-                        np.exp(dbeta * (loglike[:, istep] - maxl)),
-                        sum(np.exp(dbeta * (loglike[:, istep] - maxl))),
-                    )
-                    fi = (
-                        np.sqrt(
-                            1.0 / nsamp * sum(np.power(wi - np.mean(wi), 2))
-                        )
-                        / np.mean(wi)
-                        - self.targcov_
-                    )
-
-                    if fi <= 0.0:
-                        dbeta0 = dbeta
-                    else:
-                        dbeta1 = dbeta
-
-                    ddbeta = np.abs(odbeta - dbeta)
-                    odbeta = dbeta
-
-                if beta[istep] + dbeta >= 1.0:
-                    dbeta = 1.0 - beta[istep]
-                    wi = np.divide(
-                        np.exp(dbeta * (loglike[:, istep] - maxl)),
-                        sum(np.exp(dbeta * (loglike[:, istep] - maxl))),
-                    )
-                    beta = np.append(beta, 1.0)
-                else:
-                    beta = np.append(beta, beta[istep] + dbeta)
-
+                # Determine if we need to change models based upon the full likeihood and stuff
                 if modelid != max_level:
-                    # Determine if we need to change models based upon the full likeihood and stuff
-                    b0 = beta[istep]
-                    db0 = dbeta
+                    b0 = betas[istep]
+                    db0 = beta_next - betas[istep]
                     loglike0 = np.copy(loglike[:, istep])
                     loglikek = np.copy(fullloglike)
 
@@ -238,91 +174,53 @@ class StMcmcMultiFidelityIT:
                         < 0
                     ):
                         modelid = modelid + 1
-                        beta[istep + 1] = beta[istep]
+                        betas[istep + 1] = betas[istep]
 
-            # recompute the likeihood with the new model if needed
+            # recompute the likelihood with the new low-fidelity model if needed
             modelid = self.comm_.bcast(modelid, root=0)
             if modelid != oldmodel:
-                sendtheta = None
-                counts = None
-                dspls = None
-
-                if self.rank_ == 0:
-                    sendtheta = np.copy(theta[:, :, istep])
-                    counts = (
-                        ndim
-                        * nsamp
-                        // self.num_procs_
-                        * np.ones(self.num_procs_, dtype=int)
-                    )
-                    dspls = range(
-                        0, nsamp * ndim, ndim * nsamp // self.num_procs_
-                    )
-
-                # holder for everyone to recive there part of the theta vector
-                recvtheta = np.zeros((nsamp // self.num_procs_, ndim))
-
-                # get your theta values to use for computing th loglike
-                self.comm_.Scatterv(
-                    [sendtheta, counts, dspls, MPI.DOUBLE], recvtheta, root=0
-                )
-
                 # compute on the loglike on each core using the find modelid
-                sendloglike = self.loglike_(recvtheta, data, modelid)
-
-                scounts = nsamp // self.num_procs_
-                rcounts = (
-                    nsamp
-                    // self.num_procs_
-                    * np.ones(self.num_procs_, dtype=int)
-                )
-                rdspls = range(0, nsamp, nsamp // self.num_procs_)
-
-                # send core information to the root
-                newloglike = None
                 if self.rank_ == 0:
-                    newloglike = np.zeros(nsamp)
-
-                self.comm_.Gatherv(
-                    [sendloglike, scounts, MPI.DOUBLE],
-                    [newloglike, rcounts, rdspls, MPI.DOUBLE],
-                    root=0,
-                )
+                    sendtheta = np.copy(thetas[:, :, istep])
+                else:
+                    sendtheta = None
+                recvtheta = self._scatter_data(sendtheta, "forward")
+                sendloglike = loglike_fun(recvtheta, data, modelid)
+                newloglike = self._scatter_data(sendloglike, "backward")
 
                 # find write over the loglikes and update weights
                 if self.rank_ == 0:
-                    maxl = max(
-                        beta[istep + 1] * (newloglike - loglike[:, istep])
+                    maxl = np.max(
+                        betas[istep + 1] * (newloglike - loglike[:, istep])
                     )
+
                     wi = np.divide(
                         np.exp(
-                            beta[istep + 1] * (newloglike - loglike[:, istep])
+                            betas[istep + 1] * (newloglike[:,0] - loglike[:, istep])
                             - maxl
                         ),
-                        sum(
+                        np.sum(
                             np.exp(
-                                beta[istep + 1]
-                                * (newloglike - loglike[:, istep])
+                                betas[istep + 1]
+                                * (newloglike[:, 0] - loglike[:, istep])
                                 - maxl
                             )
                         ),
                     )
-                    loglike[:, istep] = newloglike
+
+                    loglike[:, istep] = newloglike[:, 0]
 
             if self.rank_ == 0:
-                sampmean = np.average(theta[:, :, istep], 0, wi, False)
                 sampcov = np.cov(
-                    theta[:, :, istep], None, False, False, None, None, wi
+                    thetas[:, :, istep], None, False, False, None, None, wi
                 )
 
-                sampidx = np.random.choice(nsamp, nsamp, True, wi)
-                inittheta = theta[sampidx, :, istep]
+                sampidx = np.random.choice(num_samples, num_samples, True, wi)
+                inittheta = thetas[sampidx, :, istep]
 
                 otheta = np.copy(inittheta)
                 ologlike = loglike[sampidx, istep]
                 oploglike = ploglike[sampidx, istep]
-                startloglike = np.copy(ologlike)
-                startploglike = np.copy(oploglike)
 
                 sacc = 0.0
 
@@ -330,88 +228,43 @@ class StMcmcMultiFidelityIT:
                 teval = 0
 
             # each core goes thorugh this while look until we tell it to stop
-            rest = 1.0
+            r_est = 1.0
             totalcount = 0
-            while (rest > targrho) and (totalcount < self.maxcount_):
+            while (r_est > targrho) and (totalcount < maxcount):
                 totalcount = totalcount + 1
-                # determine how long a chain to run (nchain) right now we take this as given
-
-                # generate random number seeds (This is now done at the beginning of the code
-                # my random numbers are ndim*nsamp*nchain multivariate_normal and nsamp*nchain uniform
-
                 # scatter otheta
-                sendotheta = None
-                counts = None
-                dspls = None
                 if self.rank_ == 0:
                     sendotheta = otheta
-                    counts = (
-                        ndim
-                        * nsamp
-                        // self.num_procs_
-                        * np.ones(self.num_procs_, dtype=int)
-                    )
-                    dspls = range(
-                        0, nsamp * ndim, ndim * nsamp // self.num_procs_
-                    )
-
-                local_otheta = np.zeros((nsamp // self.num_procs_, ndim))
-                self.comm_.Scatterv(
-                    [sendotheta, counts, dspls, MPI.DOUBLE],
-                    local_otheta,
-                    root=0,
-                )
+                else:
+                    sendotheta = None
+                local_otheta = self._scatter_data(sendotheta, "forward")
 
                 # broadcast scale*sampcov
                 local_propcov = np.zeros((ndim, ndim))
                 if self.rank_ == 0:
                     local_propcov = scale * sampcov
                 self.comm_.Bcast(local_propcov, root=0)
+                if ndim == 1:
+                    local_propcov = local_propcov.reshape((1, 1))
 
                 # scatter ologlike
-                sendologlike = None
-                counts = None
-                dspls = None
                 if self.rank_ == 0:
                     sendologlike = ologlike
-                    counts = (
-                        nsamp
-                        // self.num_procs_
-                        * np.ones(self.num_procs_, dtype=int)
-                    )
-                    dspls = range(0, nsamp, nsamp // self.num_procs_)
-
-                local_ologlike = np.zeros(nsamp // self.num_procs_)
-                self.comm_.Scatterv(
-                    [sendologlike, counts, dspls, MPI.DOUBLE],
-                    local_ologlike,
-                    root=0,
-                )
+                else:
+                    sendologlike = None
+                local_ologlike = self._scatter_data(sendologlike, "forward")
 
                 # scatter oploglike
-                sendoploglike = None
-                counts = None
-                dspls = None
                 if self.rank_ == 0:
                     sendoploglike = oploglike
-                    counts = (
-                        nsamp
-                        // self.num_procs_
-                        * np.ones(self.num_procs_, dtype=int)
-                    )
-                    dspls = range(0, nsamp, nsamp // self.num_procs_)
+                else:
+                    sendoploglike = None
+                local_oploglike = self._scatter_data(sendoploglike, "forward")
 
-                local_oploglike = np.zeros(nsamp // self.num_procs_)
-                self.comm_.Scatterv(
-                    [sendoploglike, counts, dspls, MPI.DOUBLE],
-                    local_oploglike,
-                    root=0,
-                )
-
-                # broadcast beta[istep+1]
+                # broadcast betas[istep+1]
                 sendbeta = None
                 if self.rank_ == 0:
-                    sendbeta = beta[istep + 1]
+                    sendbeta = betas[istep + 1]
                 local_beta = self.comm_.bcast(sendbeta, root=0)
 
                 # local chain stats
@@ -422,80 +275,41 @@ class StMcmcMultiFidelityIT:
                 for inc in range(0, self.nchain_):
 
                     ctheta = local_otheta + np.random.multivariate_normal(
-                        np.zeros(ndim), local_propcov, nsamp // self.num_procs_
+                        np.zeros(ndim),
+                        local_propcov,
+                        num_samples // self.num_procs_,
                     )
-                    cploglike = self.logprior_(ctheta)[:, 0]
-                    cloglike = self.loglike_(ctheta, data, modelid)[:, 0]
+                    cploglike = logprior_fun(ctheta)[:, 0]
+                    cloglike = loglike_fun(ctheta, data, modelid)[:, 0]
 
                     like = (local_beta * cloglike + cploglike) - (
                         local_beta * local_ologlike + local_oploglike
                     )
                     acc = (
-                        np.log(np.random.rand(nsamp // self.num_procs_)) < like
+                        np.log(np.random.rand(num_samples // self.num_procs_))
+                        < like
                     )
                     local_otheta[acc, :] = ctheta[acc, :]
                     local_ologlike[acc] = cloglike[acc]
                     local_oploglike[acc] = cploglike[acc]
                     local_sacc = local_sacc + sum(acc)
-                    local_tevals = local_tevals + nsamp // self.num_procs_
+                    local_tevals = local_tevals + num_samples // self.num_procs_
 
                 # gather otheta
-                scounts = ndim * nsamp // self.num_procs_
-                rcounts = (
-                    ndim
-                    * nsamp
-                    // self.num_procs_
-                    * np.ones(self.num_procs_, dtype=int)
-                )
-                rdspls = range(0, nsamp * ndim, ndim * nsamp // self.num_procs_)
-                recvotheta = None
-                if self.rank_ == 0:
-                    recvotheta = np.zeros((nsamp, ndim))
-                self.comm_.Gatherv(
-                    [local_otheta, scounts, MPI.DOUBLE],
-                    [recvotheta, rcounts, rdspls, MPI.DOUBLE],
-                    root=0,
-                )
+                recvotheta = self._scatter_data(local_otheta, "backward")
+
                 if self.rank_ == 0:
                     otheta = recvotheta
 
                 # gather ologlike
-                scounts = nsamp // self.num_procs_
-                rcounts = (
-                    nsamp
-                    // self.num_procs_
-                    * np.ones(self.num_procs_, dtype=int)
-                )
-                rdspls = range(0, nsamp, nsamp // self.num_procs_)
+                recvologlike = self._scatter_data(local_ologlike, "backward")
 
-                recvologlike = None
-                if self.rank_ == 0:
-                    recvologlike = np.zeros(nsamp)
-                self.comm_.Gatherv(
-                    [local_ologlike, scounts, MPI.DOUBLE],
-                    [recvologlike, rcounts, rdspls, MPI.DOUBLE],
-                    root=0,
-                )
                 if self.rank_ == 0:
                     ologlike = recvologlike
 
                 # gather oploglike
-                scounts = nsamp // self.num_procs_
-                rcounts = (
-                    nsamp
-                    // self.num_procs_
-                    * np.ones(self.num_procs_, dtype=int)
-                )
-                rdspls = range(0, nsamp, nsamp // self.num_procs_)
+                recvoploglike = self._scatter_data(local_oploglike, "backward")
 
-                recvoploglike = None
-                if self.rank_ == 0:
-                    recvoploglike = np.zeros(nsamp)
-                self.comm_.Gatherv(
-                    [local_oploglike, scounts, MPI.DOUBLE],
-                    [recvoploglike, rcounts, rdspls, MPI.DOUBLE],
-                    root=0,
-                )
                 if self.rank_ == 0:
                     oploglike = recvoploglike
 
@@ -518,16 +332,16 @@ class StMcmcMultiFidelityIT:
                 # compute correlation information
                 if self.rank_ == 0:
                     corrmat = np.corrcoef(start_theta, otheta, False)
-                    rest = max(np.diagonal(corrmat, ndim))
+                    r_est = max(np.diagonal(corrmat, ndim))
                     t1 = time.time() - t0
 
-                    print(str(teval) + " " + str(rest) + " " + str(t1))
+                    print(str(teval) + " " + str(r_est) + " " + str(t1))
 
-                # broadcast rest
+                # broadcast r_est
                 sendrest = None
                 if self.rank_ == 0:
-                    sendrest = rest
-                rest = self.comm_.bcast(sendrest, root=0)
+                    sendrest = r_est
+                r_est = self.comm_.bcast(sendrest, root=0)
 
             if self.rank_ == 0:
                 end_theta = np.copy(otheta)
@@ -550,7 +364,7 @@ class StMcmcMultiFidelityIT:
                     + " "
                     + str(teval)
                     + " "
-                    + str(beta[istep + 1])
+                    + str(betas[istep + 1])
                     + " "
                     + str(rest_state)
                     + " "
@@ -560,14 +374,14 @@ class StMcmcMultiFidelityIT:
                 )
 
                 stheta = np.dstack((stheta, start_theta))
-                theta = np.dstack((theta, otheta))
+                thetas = np.dstack((thetas, otheta))
                 loglike = np.column_stack((loglike, ologlike))
                 ploglike = np.column_stack((ploglike, oploglike))
 
                 np.savez(
                     outfile,
                     stheta=stheta,
-                    theta=theta,
+                    theta=thetas,
                     loglike=loglike,
                     ploglike=ploglike,
                     times=times,
@@ -575,15 +389,15 @@ class StMcmcMultiFidelityIT:
                     scal=scal,
                     rho=rho,
                     acr=acr,
-                    beta=beta,
+                    beta=betas,
                     modelused=modelused,
                 )
 
-            # broadcast beta to everyone to break
-            # broadcast beta[istep+1]
+            # broadcast betas to everyone to break
+            # broadcast betas[istep+1]
             sendbeta = None
             if self.rank_ == 0:
-                sendbeta = beta[istep + 1]
+                sendbeta = betas[istep + 1]
             local_beta = self.comm_.bcast(sendbeta, root=0)
 
             if local_beta >= 1.0:
@@ -615,7 +429,7 @@ class StMcmcMultiFidelityIT:
         dbeta0 = 0.0
         dbeta1 = 1.0
 
-        maxl = max(loglike)
+        maxl = np.max(loglike)
         odbeta = 10.0
         ddbeta = odbeta
 
@@ -624,7 +438,7 @@ class StMcmcMultiFidelityIT:
 
             wi = np.divide(
                 np.exp(dbeta * (loglike - maxl)),
-                sum(np.exp(dbeta * (loglike - maxl))),
+                np.sum(np.exp(dbeta * (loglike - maxl))),
             )
             fi = (
                 np.sqrt(1.0 / nsamp * sum(np.power(wi - np.mean(wi), 2)))
@@ -644,7 +458,7 @@ class StMcmcMultiFidelityIT:
             dbeta = 1.0 - beta_prev
             wi = np.divide(
                 np.exp(dbeta * (loglike - maxl)),
-                sum(np.exp(dbeta * (loglike - maxl))),
+                np.sum(np.exp(dbeta * (loglike - maxl))),
             )
             beta_next = 1.0
         else:
