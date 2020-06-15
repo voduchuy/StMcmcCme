@@ -1,21 +1,13 @@
+#%% Compare the performance of different settings for the ODE module in solving the CME of IL1Beta
 import sys
 
 sys.path.append("../")
 sys.path.append("../../")
 import numpy as np
 import mpi4py.MPI as mpi
-from inflammation.il1beta_model import Il1bModel
-from stmcmc import StMcmcMultiFidelityIT
-from pypacmensl.fsp_solver import FspSolverMultiSinks
-from pypacmensl.smfish.snapshot import SmFishSnapshot
-
 import matplotlib.pyplot as plt
-
-
+from inflammation.il1beta_model import Il1bModel
 # %%
-# The following code loads the posterior samples of IL1b parameters given
-# observations at 0, 0.5, 1, and 2 hr, and makes prediction on the probability distribution of mRNA copy number at 4 hr.
-# The prediction consists of the predictive mean and standard deviation of the probabilities of observing mRNA counts from 0 to 2000
 model = Il1bModel()
 
 if __name__ == "__main__":

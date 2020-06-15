@@ -9,11 +9,12 @@ from pypacmensl.fsp_solver import FspSolverMultiSinks
 from pypacmensl.ssa.ssa import SSASolver
 from pypacmensl.smfish.snapshot import SmFishSnapshot
 
-# %% Experiment design
-t_meas = np.array([2.0, 4.0, 6.0, 8.0, 10.0]) * 60.0
-n_cells = 200
+
 # %% Define the sequence of multifidelity models
 class GeneExpressionModel:
+    # %% Experiment design
+    t_meas = np.array([2.0, 4.0, 6.0, 8.0, 10.0]) * 60.0
+    n_cells = 200
 
     copymaxs = np.linspace(10, 400, 10, dtype=int)
     num_surrogates = len(copymaxs)
@@ -151,9 +152,10 @@ class GeneExpressionModel:
             solver.SetInitialDist(self.x0, self.p0)
             solver.SetOdeSolver("KRYLOV")
             solver.SetKrylovOrthLength(2)
-            solutions = solver.SolveTspan(t_meas, 1.0e-8)
+            solver.SetKrylovDimRange(30, 30)
+            solutions = solver.SolveTspan(self.t_meas, 1.0e-8)
             ll = 0.0
-            for i in range(0, len(t_meas)):
+            for i in range(0, len(self.t_meas)):
                 ll = ll + data[i].LogLikelihood(
                     solutions[i],
                     np.array([self.num_gene_states, self.num_gene_states + 1]),
@@ -179,13 +181,16 @@ def simulate_data(t_meas, n_cells):
 
     theta_true = np.array([k01, k12, k10, k21, kr1, kr2, trans, gamma_cyt])
 
+    def t_fun(t, out):
+        out[:] = 1.0
+
     # For generating Data high copy max
     modelid = true_model.num_surrogates - 1
     ssa = SSASolver(mpi.COMM_SELF)
     ssa.SetModel(
         true_model.stoich_mat,
-        true_model.t_fun_factory(theta_true),
-        true_model.prop_factory(modelid),
+        t_fun,
+        true_model.prop_factory(theta_true, modelid),
     )
     print(true_model.stoich_mat)
     observations = []
@@ -203,4 +208,4 @@ if __name__ == "__main__":
     rank = mpi.COMM_WORLD.Get_rank()
     np.random.seed(rank)
     if rank == 0:
-        simulate_data(t_meas, n_cells)
+        simulate_data(GeneExpressionModel.t_meas, GeneExpressionModel.n_cells)

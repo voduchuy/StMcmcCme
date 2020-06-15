@@ -13,8 +13,6 @@ from stmcmc import (
 from repressilator_model import RepressilatorModel
 
 MODEL = RepressilatorModel()
-
-
 # %%
 if __name__ == "__main__":
     rank = mpi.COMM_WORLD.Get_rank()

@@ -2,6 +2,7 @@ import numpy as np
 from pypacmensl.ssa.ssa import SSASolver
 from pypacmensl.fsp_solver import FspSolverMultiSinks
 from pypacmensl.smfish.snapshot import SmFishSnapshot
+from numba import jit
 import mpi4py.MPI as mpi
 import matplotlib.pyplot as plt
 
@@ -68,6 +69,7 @@ class RepressilatorModel:
 
         copymax = self.copymaxs[:, modelid]
 
+        @jit
         def propensity(reaction, x, out):
             if reaction == 0:
                 out[:] = (
@@ -136,14 +138,16 @@ class RepressilatorModel:
         nsamp = thetas.shape[0]
         loglike = np.zeros((nsamp, 1))
         data = dataz[modelid]
-        solver = FspSolverMultiSinks(mpi.COMM_SELF)
+
         for jnc in range(0, nsamp):
             p0 = np.array([1.0])
             prop = self.prop_factory(thetas[jnc, :], modelid)
+            solver = FspSolverMultiSinks(mpi.COMM_SELF)
             solver.SetModel(self.stoich_mat, None, prop)
             solver.SetFspShape(None, self.constr_init)
             solver.SetInitialDist(self.x0, p0)
             solver.SetOdeSolver("KRYLOV")
+            solver.SetKrylovDimRange(30, 30)
             solver.SetKrylovOrthLength(2)
             solutions = solver.SolveTspan(self.t_meas, 1.0e-8)
             ll = 0.0
