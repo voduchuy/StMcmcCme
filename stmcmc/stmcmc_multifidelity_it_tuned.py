@@ -3,7 +3,7 @@ import numpy as np
 import copy
 import time
 from mpi4py import MPI
-from typing import Tuple
+from typing import Tuple, Callable, Any
 
 
 class StMcmcMultiFidelityITTuned:
@@ -18,15 +18,15 @@ class StMcmcMultiFidelityITTuned:
 
     def Run(
         self,
-        logprior_fun,
-        loglike_fun,
-        data,
-        init_thetas,
-        outfile=None,
-        nsamp=128,
-        max_level=0,
-        max_num_steps=1000,
-        maxcount=100,
+        logprior_fun: Callable[[np.ndarray], np.ndarray],
+        loglike_fun: Callable[[np.ndarray, Any, int], np.ndarray],
+        data: Any,
+        init_thetas: np.ndarray,
+        outfile: str = None,
+        num_samples: int = 128,
+        max_level: int = 0,
+        max_num_steps: int = 1000,
+        maxcount: int = 100,
     ):
         """
         Sample from the posterior distribution using the tuned information-based STMCMC sampler.
@@ -113,7 +113,7 @@ class StMcmcMultiFidelityITTuned:
 
         # define various variables we will need on the root node
         if self.rank_ == 0:
-            loglike = np.zeros((nsamp, 1))
+            loglike = np.zeros((num_samples, 1))
             loglike[:, 0] = recvloglike[:, 0]
 
             betas = np.zeros(1)
@@ -206,7 +206,7 @@ class StMcmcMultiFidelityITTuned:
                         )
                         fiz[ib] = (
                             np.sqrt(
-                                1.0 / nsamp * sum(np.power(wi - np.mean(wi), 2))
+                                    1.0 / num_samples * sum(np.power(wi - np.mean(wi), 2))
                             )
                             / np.mean(wi)
                             - self.targcov_
@@ -262,7 +262,7 @@ class StMcmcMultiFidelityITTuned:
                     thetas[:, :, istep], None, False, False, None, None, wi
                 )
 
-                sampidx = np.random.choice(nsamp, nsamp, True, wi)
+                sampidx = np.random.choice(num_samples, num_samples, True, wi)
                 inittheta = thetas[sampidx, :, istep]
 
                 otheta = np.copy(inittheta)
@@ -322,7 +322,7 @@ class StMcmcMultiFidelityITTuned:
                 for inc in range(0, self.nchain_):
 
                     ctheta = local_otheta + np.random.multivariate_normal(
-                        np.zeros(ndim), local_propcov, nsamp // self.num_procs_
+                        np.zeros(ndim), local_propcov, num_samples // self.num_procs_
                     )
                     cploglike = logprior_fun(ctheta)[:, 0]
                     cloglike = loglike_fun(ctheta, data, modelid)[:, 0]
@@ -331,13 +331,13 @@ class StMcmcMultiFidelityITTuned:
                         local_beta * local_ologlike + local_oploglike
                     )
                     acc = (
-                        np.log(np.random.rand(nsamp // self.num_procs_)) < like
+                            np.log(np.random.rand(num_samples // self.num_procs_)) < like
                     )
                     local_otheta[acc, :] = ctheta[acc, :]
                     local_ologlike[acc] = cloglike[acc]
                     local_oploglike[acc] = cploglike[acc]
                     local_sacc = local_sacc + sum(acc)
-                    local_tevals = local_tevals + nsamp // self.num_procs_
+                    local_tevals = local_tevals + num_samples // self.num_procs_
 
                 # gather otheta
                 recvotheta = self._scatter_data(local_otheta, "backward")

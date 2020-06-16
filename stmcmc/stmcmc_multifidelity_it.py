@@ -2,7 +2,7 @@
 import numpy as np
 import time
 from mpi4py import MPI
-from typing import Tuple
+from typing import Tuple, Callable, Any
 
 
 class StMcmcMultiFidelityIT:
@@ -19,15 +19,15 @@ class StMcmcMultiFidelityIT:
 
     def Run(
         self,
-        logprior_fun,
-        loglike_fun,
-        data,
-        init_thetas,
-        outfile=None,
-        num_samples=128,
-        max_level=0,
-        max_num_steps=1000,
-        maxcount=100,
+        logprior_fun: Callable[[np.ndarray], np.ndarray],
+        loglike_fun: Callable[[np.ndarray, Any, int], np.ndarray],
+        data: Any,
+        init_thetas: np.ndarray,
+        outfile: str = None,
+        num_samples: int = 128,
+        max_level: int = 0,
+        max_num_steps: int = 1000,
+        maxcount: int = 100,
     ):
         """
         Sample from the posterior distribution using the information-based STMCMC sampler.
@@ -196,7 +196,8 @@ class StMcmcMultiFidelityIT:
 
                     wi = np.divide(
                         np.exp(
-                            betas[istep + 1] * (newloglike[:,0] - loglike[:, istep])
+                            betas[istep + 1]
+                            * (newloglike[:, 0] - loglike[:, istep])
                             - maxl
                         ),
                         np.sum(
