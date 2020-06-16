@@ -4,5 +4,5 @@
 .idea
 *.pdf
 *.pyc
-tests/poisson_mcmc.npz
+examples/poisson/poisson_mcmc.npz
 */\*.npz
