@@ -30,7 +30,7 @@ where the options for ```<sampler_type>``` are:
 
 Note that these examples may take a few days on several nodes of a HPC cluster to run all the sampler variants. We have included the test results when ran on Sandia's HPC system, as well as the scripts to analyze them, in the subfolder ```results```.
 
-For a quick taste of these methods, the ```poisson``` example is included to demonstrate the sampling methods on a simple problem of infering the parameter of a Poisson distribution. This example can be executed in a few minutes on a laptop.
+For a quick test of these methods, the ```poisson``` example is included to demonstrate the sampling methods on a simple problem of infering the parameter of a Poisson distribution. This example can be executed in a few minutes on a laptop.
 
 # Contacts
 
