@@ -16,7 +16,7 @@ To execute the scripts in this repository, the following software packages need 
 
 The codes to perform Bayesian inference on the three example models in the paper are provided in the subfolder ```examples```. 
 
-For the ```repressilator``` and ```compartmental_gene_expression``` examples, you may simulate a new set of smFISH data by running the scripts with name pattern ```<example_name>_model.py``` (please only use a single core). After that step, an .npz file of the name ```<example_name>_data.npz``` will be created in the same folder. For the Inflammation Response example, the data (from real experiments done by Kalb et al. (https://journals.plos.org/plosone/article/comments?id=10.1371/journal.pone.0215602)) has been included.
+For the ```repressilator``` and ```compartmental_gene_expression``` examples, you may simulate a new set of smFISH data by running the scripts with name pattern ```<example_name>_model.py``` (please only use a single core). After that step, an .npz file of the name ```<example_name>_data.npz``` will be created in the same folder. For the Inflammation Response example, the data (a subset of the real experimental data collected by Kalb et al. (https://journals.plos.org/plosone/article/comments?id=10.1371/journal.pone.0215602)) has been included.
 
 To run the Bayesian inference from the generated or real datasets, use the syntax
 ```
