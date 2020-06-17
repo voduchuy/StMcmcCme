@@ -28,7 +28,7 @@ where the options for ```<sampler_type>``` are:
 * ```ess```: use the Multifidelity ST-MCMC sampler with ESS-based briding.
 * ```it_tuned```: use the Multifidelity ST-MCMC sampler with Tuned Information Theoretic criteria.
 
-Note that these examples may take a few days on several nodes of a HPC cluster to run all the sampler variants. We have included the test results when ran on Sandia's HPC system, as long as the scripts to analyze them, in the subfolder ```results```.
+Note that these examples may take a few days on several nodes of a HPC cluster to run all the sampler variants. We have included the test results when ran on Sandia's HPC system, as well as the scripts to analyze them, in the subfolder ```results```.
 
 For a quick taste of these methods, the ```poisson``` example is included to demonstrate the sampling methods on a simple problem of infering the parameter of a Poisson distribution. This example can be executed in a few minutes on a laptop.
 
